@@ -6,8 +6,8 @@ pub(super) struct State {
 
 	subscriptions: std::collections::HashMap<String, crate::proto::QoS>,
 
-	subscriptions_waiting_to_be_acked: std::collections::HashMap<crate::proto::PacketIdentifier, Vec<crate::proto::SubscribeTo>>,
-	unsubscriptions_waiting_to_be_acked: std::collections::HashMap<crate::proto::PacketIdentifier, Vec<String>>,
+	subscriptions_waiting_to_be_acked: std::collections::BTreeMap<crate::proto::PacketIdentifier, Vec<crate::proto::SubscribeTo>>,
+	unsubscriptions_waiting_to_be_acked: std::collections::BTreeMap<crate::proto::PacketIdentifier, Vec<String>>,
 }
 
 impl State {

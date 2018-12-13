@@ -132,7 +132,52 @@ pub enum PacketIdentifierDupQoS {
 }
 
 /// A packet identifier. Two-byte unsigned integer that cannot be zero.
-pub type PacketIdentifier = std::num::NonZeroU16;
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PacketIdentifier(u16);
+
+impl PacketIdentifier {
+	/// Returns the largest value that is a valid packet identifier.
+	pub const fn max_value() -> Self {
+		PacketIdentifier(u16::max_value())
+	}
+
+	/// Convert the given raw packet identifier into this type.
+	#[allow(clippy::new_ret_no_self)] // Clippy bug
+	pub fn new(raw: u16) -> Option<Self> {
+		match raw {
+			0 => None,
+			raw => Some(PacketIdentifier(raw)),
+		}
+	}
+
+	/// Get the raw packet identifier.
+	pub fn get(self) -> u16 {
+		self.0
+	}
+}
+
+impl std::fmt::Display for PacketIdentifier {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		self.0.fmt(f)
+	}
+}
+
+impl std::ops::Add<u16> for PacketIdentifier {
+	type Output = Self;
+
+	fn add(self, other: u16) -> Self::Output {
+		PacketIdentifier(match std::num::Wrapping(self.0) + std::num::Wrapping(other) {
+			std::num::Wrapping(0) => 1,
+			std::num::Wrapping(value) => value,
+		})
+	}
+}
+
+impl std::ops::AddAssign<u16> for PacketIdentifier {
+	fn add_assign(&mut self, other: u16) {
+		*self = *self + other;
+	}
+}
 
 /// A subscription request.
 #[derive(Clone, Debug)]

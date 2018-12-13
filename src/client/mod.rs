@@ -402,12 +402,7 @@ struct PacketIdentifiers {
 impl PacketIdentifiers {
 	fn reserve(&mut self) -> crate::proto::PacketIdentifier {
 		loop {
-			self.previous =
-				crate::proto::PacketIdentifier::new(match self.previous.get() {
-					std::u16::MAX => 1,
-					value => value + 1,
-				})
-				.expect("unreachable");
+			self.previous += 1;
 			if !self.in_use.contains(&self.previous) {
 				break;
 			}
@@ -426,7 +421,7 @@ impl Default for PacketIdentifiers {
 	fn default() -> Self {
 		PacketIdentifiers {
 			in_use: Default::default(),
-			previous: crate::proto::PacketIdentifier::new(u16::max_value()).expect("unreachable: u16::max_value() is not 0"),
+			previous: crate::proto::PacketIdentifier::max_value(),
 		}
 	}
 }
