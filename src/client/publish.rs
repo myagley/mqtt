@@ -22,7 +22,7 @@ impl State {
 
 					match ack_sender.send(()) {
 						Ok(()) => (),
-						Err(_) => log::debug!("could not send ack for publish request because ack receiver has been dropped"),
+						Err(()) => log::debug!("could not send ack for publish request because ack receiver has been dropped"),
 					}
 				},
 				None => log::warn!("ignoring PUBACK for a PUBLISH we never sent"),
@@ -73,7 +73,7 @@ impl State {
 
 					match ack_sender.send(()) {
 						Ok(()) => (),
-						Err(_) => log::debug!("could not send ack for publish request because ack receiver has been dropped"),
+						Err(()) => log::debug!("could not send ack for publish request because ack receiver has been dropped"),
 					}
 				},
 

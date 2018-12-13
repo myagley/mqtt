@@ -27,7 +27,7 @@ fn main() {
 
 	let f = client.for_each(|publications| {
 		for publication in publications {
-			log::debug!(
+			log::info!(
 				"Received publication: {:?} {:?} {:?}",
 				publication.topic_name,
 				std::str::from_utf8(&publication.payload).expect("test payloads are valid str"),

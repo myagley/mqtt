@@ -26,7 +26,7 @@ fn main() {
 
 			let topic_name = "foo".to_string();
 
-			log::debug!("Publishing to {} ...", topic_name);
+			log::info!("Publishing to {} ...", topic_name);
 
 			publish_handle
 				.publish(mqtt::Publication {
@@ -42,7 +42,7 @@ fn main() {
 				})
 		})
 		.for_each(|topic_name| {
-			log::debug!("Published to {}", topic_name);
+			log::info!("Published to {}", topic_name);
 			Ok(())
 		});
 	executor.spawn(publish_loop);

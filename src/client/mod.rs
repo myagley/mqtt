@@ -280,7 +280,6 @@ fn client_poll<S>(
 	ping: &mut self::ping::State,
 	publish: &mut self::publish::State,
 	subscriptions: &mut self::subscriptions::State,
-
 ) -> futures::Poll<Vec<crate::Publication>, std::io::Error>
 where
 	S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
@@ -427,7 +426,7 @@ impl Default for PacketIdentifiers {
 	fn default() -> Self {
 		PacketIdentifiers {
 			in_use: Default::default(),
-			previous: crate::proto::PacketIdentifier::new(1).expect("unreachable: 1 is not 0"),
+			previous: crate::proto::PacketIdentifier::new(u16::max_value()).expect("unreachable: u16::max_value() is not 0"),
 		}
 	}
 }

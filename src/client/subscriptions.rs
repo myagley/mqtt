@@ -116,7 +116,7 @@ impl State {
 		Ok(packets_waiting_to_be_sent)
 	}
 
-	pub(super) fn new_connection<'a>(&'a mut self, reset_connection: bool) -> Vec<crate::proto::Packet> {
+	pub(super) fn new_connection(&mut self, reset_connection: bool) -> Vec<crate::proto::Packet> {
 		if reset_connection {
 			self.packet_identifiers = Default::default();
 
