@@ -116,8 +116,8 @@ impl State {
 		Ok(packets_waiting_to_be_sent)
 	}
 
-	pub(super) fn new_connection(&mut self, reset_connection: bool) -> Vec<crate::proto::Packet> {
-		if reset_connection {
+	pub(super) fn new_connection(&mut self, reset_session: bool) -> impl Iterator<Item = crate::proto::Packet> {
+		if reset_session {
 			self.packet_identifiers = Default::default();
 
 			let mut subscriptions = std::mem::replace(&mut self.subscriptions, Default::default());
@@ -160,16 +160,16 @@ impl State {
 				.collect();
 
 			if subscriptions_waiting_to_be_acked.is_empty() {
-				vec![]
+				NewConnectionIter::Empty
 			}
 			else {
 				let packet_identifier = self.packet_identifiers.reserve();
 				self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
 
-				vec![crate::proto::Packet::Subscribe {
+				NewConnectionIter::Single(std::iter::once(crate::proto::Packet::Subscribe {
 					packet_identifier,
 					subscribe_to: subscriptions_waiting_to_be_acked,
-				}]
+				}))
 			}
 		}
 		else {
@@ -197,7 +197,7 @@ impl State {
 				_ => unreachable!(),
 			});
 
-			unacked_packets
+			NewConnectionIter::Multiple(unacked_packets.into_iter())
 		}
 	}
 }
@@ -211,6 +211,25 @@ impl Default for State {
 
 			subscriptions_waiting_to_be_acked: Default::default(),
 			unsubscriptions_waiting_to_be_acked: Default::default(),
+		}
+	}
+}
+
+#[derive(Debug)]
+enum NewConnectionIter {
+	Empty,
+	Single(std::iter::Once<crate::proto::Packet>),
+	Multiple(std::vec::IntoIter<crate::proto::Packet>),
+}
+
+impl Iterator for NewConnectionIter {
+	type Item = crate::proto::Packet;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		match self {
+			NewConnectionIter::Empty => None,
+			NewConnectionIter::Single(packet) => packet.next(),
+			NewConnectionIter::Multiple(packets) => packets.next(),
 		}
 	}
 }
