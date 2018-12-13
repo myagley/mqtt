@@ -53,7 +53,7 @@ impl State {
 		}
 	}
 
-	pub(super) fn reset(&mut self) {
+	pub(super) fn new_connection(&mut self) {
 		*self = State::BeginWaitingForNextPing;
 	}
 }

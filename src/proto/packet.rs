@@ -5,7 +5,7 @@ use bytes::{ Buf, IntoBuf };
 use super::{ BufExt, BufMutExt };
 
 /// An MQTT packet
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Packet {
 	/// Ref: 3.2 CONNACK – Acknowledge connection request
 	ConnAck {
@@ -119,77 +119,6 @@ impl Packet {
 
 	/// The type of a [`Packet::Unsubscribe`]
 	pub const UNSUBSCRIBE: u8 = 0xA0;
-
-	/// Create a duplicate of the current packet, with the expectation that the clone will be resent
-	/// if the connection to the server is re-established and the session is resumed.
-	///
-	/// If the packet should not be resent, then this returns `None`.
-	pub(crate) fn dup(&self) -> Option<Self> {
-		#[allow(clippy::match_same_arms)]
-		match self {
-			// Connection-related packets should never be resent
-			Packet::ConnAck { .. } | Packet::Connect { .. } => None,
-
-			// Ping-related packets should never be resent
-			Packet::PingReq | Packet::PingResp => None,
-
-			Packet::PubAck { packet_identifier } => Some(Packet::PubAck { packet_identifier: *packet_identifier }),
-
-			Packet::PubComp { .. } => unimplemented!(),
-
-			// PUBLISH packets with QoS == AtMostOnce should never be resent
-			Packet::Publish { packet_identifier_dup_qos: PacketIdentifierDupQoS::AtMostOnce, .. } => None,
-
-			// PUBLISH packets with QoS == AtLeastOnce or ExactlyOnce have dup set to true
-			Packet::Publish {
-				packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _),
-				retain,
-				topic_name,
-				payload,
-			} => Some(Packet::Publish {
-				packet_identifier_dup_qos: PacketIdentifierDupQoS::AtLeastOnce(*packet_identifier, true),
-				retain: *retain,
-				topic_name: topic_name.clone(),
-				payload: payload.clone(),
-			}),
-
-			Packet::Publish {
-				packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _),
-				retain,
-				topic_name,
-				payload,
-			} => Some(Packet::Publish {
-				packet_identifier_dup_qos: PacketIdentifierDupQoS::ExactlyOnce(*packet_identifier, true),
-				retain: *retain,
-				topic_name: topic_name.clone(),
-				payload: payload.clone(),
-			}),
-
-			Packet::PubRec { .. } | Packet::PubRel { .. } => unimplemented!(),
-
-			// SUBACK is sent by the server
-			Packet::SubAck { .. } => unreachable!(),
-
-			Packet::Subscribe {
-				packet_identifier,
-				subscribe_to,
-			} => Some(Packet::Subscribe {
-				packet_identifier: *packet_identifier,
-				subscribe_to: subscribe_to.clone(),
-			}),
-
-			// UNSUBACK is sent by the server
-			Packet::UnsubAck { .. } => unreachable!(),
-
-			Packet::Unsubscribe {
-				packet_identifier,
-				unsubscribe_from,
-			} => Some(Packet::Unsubscribe {
-				packet_identifier: *packet_identifier,
-				unsubscribe_from: unsubscribe_from.clone(),
-			}),
-		}
-	}
 }
 
 #[allow(clippy::doc_markdown)]

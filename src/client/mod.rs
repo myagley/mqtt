@@ -26,13 +26,6 @@ pub struct Client<IoS> where IoS: IoSource {
 
 	/// Packets waiting to be written to the underlying `Framed`
 	packets_waiting_to_be_sent: std::collections::VecDeque<crate::proto::Packet>,
-
-	/// Dupes of packets that have been written to the underlying `Framed`, but not yet drained.
-	/// That is, `poll_complete()` hasn't returned `Async::Ready(())` yet.
-	///
-	/// If the connection is re-established, it is unknown if these packets had been received by the server,
-	/// so they will be sent again.
-	packets_in_transit: Vec<crate::proto::Packet>,
 }
 
 impl<IoS> Client<IoS> where IoS: IoSource {
@@ -102,7 +95,6 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 			subscriptions: Default::default(),
 
 			packets_waiting_to_be_sent: Default::default(),
-			packets_in_transit: Default::default(),
 		}
 	}
 }
@@ -138,18 +130,13 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource<Error = std::io::Error> {
 			if new_connection {
 				log::debug!("New connection established");
 
-				let packets_in_transit = std::mem::replace(&mut self.packets_in_transit, Default::default());
-				self.packets_waiting_to_be_sent = packets_in_transit.into_iter().collect();
+				self.packets_waiting_to_be_sent = Default::default();
 
-				if reset_session {
-					log::debug!("Resetting session...");
+				self.ping.new_connection();
 
-					self.ping.reset();
+				self.packets_waiting_to_be_sent.extend(self.publish.new_connection());
 
-					if let Some(packet) = self.subscriptions.reset() {
-						self.packets_waiting_to_be_sent.push_back(packet);
-					}
-				}
+				self.packets_waiting_to_be_sent.extend(self.subscriptions.new_connection(reset_session));
 			}
 
 			match client_poll(
@@ -158,7 +145,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource<Error = std::io::Error> {
 				&mut self.publish_request_recv,
 				&mut self.subscriptions_updated_recv,
 				&mut self.packets_waiting_to_be_sent,
-				&mut self.packets_in_transit,
 				&mut self.ping,
 				&mut self.publish,
 				&mut self.subscriptions,
@@ -291,7 +277,6 @@ fn client_poll<S>(
 	publish_request_recv: &mut futures::sync::mpsc::Receiver<PublishRequest>,
 	subscriptions_updated_recv: &mut futures::sync::mpsc::Receiver<SubscriptionUpdate>,
 	packets_waiting_to_be_sent: &mut std::collections::VecDeque<crate::proto::Packet>,
-	packets_in_transit: &mut Vec<crate::proto::Packet>,
 	ping: &mut self::ping::State,
 	publish: &mut self::publish::State,
 	subscriptions: &mut self::subscriptions::State,
@@ -305,12 +290,8 @@ where
 	loop {
 		// Begin sending any packets waiting to be sent
 		while let Some(packet) = packets_waiting_to_be_sent.pop_front() {
-			let dup = packet.dup();
-
 			match framed.start_send(packet)? {
-				futures::AsyncSink::Ready => if let Some(dup) = dup {
-					packets_in_transit.push(dup);
-				},
+				futures::AsyncSink::Ready => (),
 
 				futures::AsyncSink::NotReady(packet) => {
 					packets_waiting_to_be_sent.push_front(packet);
@@ -320,10 +301,9 @@ where
 		}
 
 		// Finish sending any packets waiting to be sent.
-		match framed.poll_complete()? {
-			futures::Async::Ready(()) => packets_in_transit.clear(),
-			futures::Async::NotReady => (),
-		}
+		//
+		// We don't care whether this returns Async::NotReady or Ready.
+		let _ = framed.poll_complete()?;
 
 		let mut continue_loop = false;
 
@@ -422,13 +402,16 @@ struct PacketIdentifiers {
 
 impl PacketIdentifiers {
 	fn reserve(&mut self) -> crate::proto::PacketIdentifier {
-		while self.in_use.contains(&self.previous) {
+		loop {
 			self.previous =
 				crate::proto::PacketIdentifier::new(match self.previous.get() {
 					std::u16::MAX => 1,
 					value => value + 1,
 				})
 				.expect("unreachable");
+			if !self.in_use.contains(&self.previous) {
+				break;
+			}
 		}
 
 		self.in_use.insert(self.previous);

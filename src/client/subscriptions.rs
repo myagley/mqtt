@@ -116,59 +116,88 @@ impl State {
 		Ok(packets_waiting_to_be_sent)
 	}
 
-	pub(super) fn reset(&mut self) -> Option<crate::proto::Packet> {
-		self.packet_identifiers = Default::default();
+	pub(super) fn new_connection<'a>(&'a mut self, reset_connection: bool) -> Vec<crate::proto::Packet> {
+		if reset_connection {
+			self.packet_identifiers = Default::default();
 
-		let mut subscriptions = std::mem::replace(&mut self.subscriptions, Default::default());
-		let subscriptions_waiting_to_be_acked = std::mem::replace(&mut self.subscriptions_waiting_to_be_acked, Default::default());
-		let unsubscriptions_waiting_to_be_acked = std::mem::replace(&mut self.unsubscriptions_waiting_to_be_acked, Default::default());
+			let mut subscriptions = std::mem::replace(&mut self.subscriptions, Default::default());
+			let subscriptions_waiting_to_be_acked = std::mem::replace(&mut self.subscriptions_waiting_to_be_acked, Default::default());
+			let unsubscriptions_waiting_to_be_acked = std::mem::replace(&mut self.unsubscriptions_waiting_to_be_acked, Default::default());
 
-		// Apply all pending (ie unacked) changes to the set of subscriptions, in order of packet identifier
-		let pending_changes: std::collections::BTreeMap<_, _> =
-			subscriptions_waiting_to_be_acked.into_iter().map(|(packet_identifier, subscribe_to)| {
-				let subscription_updates: Vec<_> =
-					subscribe_to.into_iter()
-					.map(super::SubscriptionUpdate::Subscribe)
-					.collect();
-				(packet_identifier, subscription_updates)
-			})
-			.chain(unsubscriptions_waiting_to_be_acked.into_iter().map(|(packet_identifier, unsubscribe_from)| {
-				let subscription_updates: Vec<_> =
-					unsubscribe_from.into_iter()
-					.map(super::SubscriptionUpdate::Unsubscribe)
-					.collect();
-				(packet_identifier, subscription_updates)
-			}))
-			.collect();
-		for (_, pending_changes) in pending_changes {
-			for pending_change in pending_changes {
-				match pending_change {
-					super::SubscriptionUpdate::Subscribe(crate::proto::SubscribeTo { topic_filter, qos }) => subscriptions.insert(topic_filter, qos),
-					super::SubscriptionUpdate::Unsubscribe(topic_filter) => subscriptions.remove(&topic_filter),
-				};
+			// Apply all pending (ie unacked) changes to the set of subscriptions, in order of packet identifier
+			let pending_changes: std::collections::BTreeMap<_, _> =
+				subscriptions_waiting_to_be_acked.into_iter().map(|(packet_identifier, subscribe_to)| {
+					let subscription_updates: Vec<_> =
+						subscribe_to.into_iter()
+						.map(super::SubscriptionUpdate::Subscribe)
+						.collect();
+					(packet_identifier, subscription_updates)
+				})
+				.chain(unsubscriptions_waiting_to_be_acked.into_iter().map(|(packet_identifier, unsubscribe_from)| {
+					let subscription_updates: Vec<_> =
+						unsubscribe_from.into_iter()
+						.map(super::SubscriptionUpdate::Unsubscribe)
+						.collect();
+					(packet_identifier, subscription_updates)
+				}))
+				.collect();
+			for (_, pending_changes) in pending_changes {
+				for pending_change in pending_changes {
+					match pending_change {
+						super::SubscriptionUpdate::Subscribe(crate::proto::SubscribeTo { topic_filter, qos }) => subscriptions.insert(topic_filter, qos),
+						super::SubscriptionUpdate::Unsubscribe(topic_filter) => subscriptions.remove(&topic_filter),
+					};
+				}
+			}
+
+			// Generate SUBSCRIBE packets for the final set of subscriptions
+			let subscriptions_waiting_to_be_acked: Vec<_> =
+				subscriptions.into_iter()
+				.map(|(topic_filter, qos)| crate::proto::SubscribeTo {
+					topic_filter,
+					qos,
+				})
+				.collect();
+
+			if subscriptions_waiting_to_be_acked.is_empty() {
+				vec![]
+			}
+			else {
+				let packet_identifier = self.packet_identifiers.reserve();
+				self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
+
+				vec![crate::proto::Packet::Subscribe {
+					packet_identifier,
+					subscribe_to: subscriptions_waiting_to_be_acked,
+				}]
 			}
 		}
-
-		// Generate SUBSCRIBE packets for the final set of subscriptions
-		let subscriptions_waiting_to_be_acked: Vec<_> =
-			subscriptions.into_iter()
-			.map(|(topic_filter, qos)| crate::proto::SubscribeTo {
-				topic_filter,
-				qos,
-			})
-			.collect();
-
-		if subscriptions_waiting_to_be_acked.is_empty() {
-			None
-		}
 		else {
-			let packet_identifier = self.packet_identifiers.reserve();
-			self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
+			// Re-create all pending (ie unacked) changes to the set of subscriptions, in order of packet identifier
+			let mut unacked_packets: Vec<_> =
+				self.subscriptions_waiting_to_be_acked.iter()
+				.map(|(packet_identifier, subscribe_to)| crate::proto::Packet::Subscribe {
+					packet_identifier: *packet_identifier,
+					subscribe_to: subscribe_to.clone(),
+				})
+				.chain(
+					self.unsubscriptions_waiting_to_be_acked.iter()
+					.map(|(packet_identifier, unsubscribe_from)| crate::proto::Packet::Unsubscribe {
+						packet_identifier: *packet_identifier,
+						unsubscribe_from: unsubscribe_from.clone(),
+					}))
+				.collect();
+			unacked_packets.sort_by(|packet1, packet2| match (packet1, packet2) {
+				(
+					crate::proto::Packet::Subscribe { packet_identifier: packet_identifier1, .. },
+					crate::proto::Packet::Subscribe { packet_identifier: packet_identifier2, .. },
+				) =>
+					packet_identifier1.cmp(packet_identifier2),
 
-			Some(crate::proto::Packet::Subscribe {
-				packet_identifier,
-				subscribe_to: subscriptions_waiting_to_be_acked,
-			})
+				_ => unreachable!(),
+			});
+
+			unacked_packets
 		}
 	}
 }
