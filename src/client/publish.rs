@@ -12,7 +12,7 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		publish_requests_waiting_to_be_sent: Vec<super::PublishRequest>,
-	) -> std::io::Result<(Vec<crate::proto::Packet>, Vec<crate::Publication>)> {
+	) -> (Vec<crate::proto::Packet>, Vec<crate::Publication>) {
 		let mut packets_waiting_to_be_sent = vec![];
 		let mut publications_received = vec![];
 
@@ -129,7 +129,7 @@ impl State {
 			}
 		}
 
-		Ok((packets_waiting_to_be_sent, publications_received))
+		(packets_waiting_to_be_sent, publications_received)
 	}
 
 	pub (super) fn new_connection<'a>(&'a mut self) -> impl Iterator<Item = crate::proto::Packet> + 'a {

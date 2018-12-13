@@ -59,7 +59,7 @@ pub enum Packet {
 	/// Ref: 3.9 SUBACK – Subscribe acknowledgement
 	SubAck {
 		packet_identifier: PacketIdentifier,
-		qos: Vec<QoS>,
+		qos: Vec<SubAckQos>,
 	},
 
 	/// Ref: 3.8 SUBSCRIBE - Subscribe to topics
@@ -206,6 +206,14 @@ impl From<QoS> for u8 {
 	}
 }
 
+#[allow(clippy::doc_markdown)]
+/// QoS returned in a SUBACK packet. Either one of the [`QoS`] values, or an error code.
+#[derive(Clone, Copy, Debug)]
+pub enum SubAckQos {
+	Success(QoS),
+	Failure,
+}
+
 /// A tokio codec that encodes and decodes MQTT packets.
 ///
 /// Ref: 2 MQTT Control Packet format
@@ -214,7 +222,7 @@ pub struct PacketCodec;
 
 impl tokio::codec::Decoder for PacketCodec {
 	type Item = Packet;
-	type Error = std::io::Error;
+	type Error = super::DecodeError;
 
 	fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
 		let (first_byte, remaining_length, end_of_fixed_header) = {
@@ -248,7 +256,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let session_present = match flags {
 					0x00 => false,
 					0x01 => true,
-					flags => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unrecognized connect acknowledge flags {}", flags))),
+					flags => return Err(super::DecodeError::UnrecognizedConnAckFlags(flags)),
 				};
 
 				let return_code: super::ConnectReturnCode = src.try_get_u8()?.into();
@@ -266,7 +274,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				Ok(Some(Packet::PubAck {
@@ -278,7 +286,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				Ok(Some(Packet::PubComp {
@@ -299,7 +307,7 @@ impl tokio::codec::Decoder for PacketCodec {
 						let packet_identifier = src.try_get_u16_be()?;
 						let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 							Some(packet_identifier) => packet_identifier,
-							None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+							None => return Err(super::DecodeError::ZeroPacketIdentifier),
 						};
 						PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, dup)
 					},
@@ -308,12 +316,12 @@ impl tokio::codec::Decoder for PacketCodec {
 						let packet_identifier = src.try_get_u16_be()?;
 						let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 							Some(packet_identifier) => packet_identifier,
-							None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+							None => return Err(super::DecodeError::ZeroPacketIdentifier),
 						};
 						PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, dup)
 					},
 
-					qos => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unexpected QoS {}", qos))),
+					qos => return Err(super::DecodeError::UnrecognizedQoS(qos)),
 				};
 
 				let mut payload = Vec::with_capacity(src.remaining());
@@ -331,7 +339,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				Ok(Some(Packet::PubRec {
@@ -343,7 +351,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				Ok(Some(Packet::PubRel {
@@ -355,17 +363,17 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				let mut qos = vec![];
 				for _ in 2..remaining_length {
 					qos.push(match src.try_get_u8()? {
-						0x00 => QoS::AtMostOnce,
-						0x01 => QoS::AtLeastOnce,
-						0x02 => QoS::ExactlyOnce,
-						0x80 => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "server rejected SUBSCRIBE QoS")),
-						qos => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("unexpected QoS {}", qos))),
+						0x00 => SubAckQos::Success(QoS::AtMostOnce),
+						0x01 => SubAckQos::Success(QoS::AtLeastOnce),
+						0x02 => SubAckQos::Success(QoS::ExactlyOnce),
+						0x80 => SubAckQos::Failure,
+						qos => return Err(super::DecodeError::UnrecognizedQoS(qos)),
 					});
 				}
 
@@ -379,7 +387,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
-					None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "packet identifier is 0")),
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
 
 				Ok(Some(Packet::UnsubAck {
@@ -388,19 +396,14 @@ impl tokio::codec::Decoder for PacketCodec {
 			},
 
 			(packet_type, flags, remaining_length) =>
-				Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!(
-					"unrecognized packet type 0x{:1X} with flags 0x{:1X} and remaining length {}",
-					packet_type,
-					flags,
-					remaining_length,
-				))),
+				Err(super::DecodeError::UnrecognizedPacket { packet_type, flags, remaining_length }),
 		}
 	}
 }
 
 impl tokio::codec::Encoder for PacketCodec {
 	type Item = Packet;
-	type Error = std::io::Error;
+	type Error = super::EncodeError;
 
 	fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
 		dst.reserve(std::mem::size_of::<u8>() + 4 * std::mem::size_of::<u8>());
@@ -434,9 +437,9 @@ impl tokio::codec::Encoder for PacketCodec {
 				}
 				{
 					#[allow(clippy::cast_possible_truncation)]
-					let keep_alive = match keep_alive.as_secs() {
-						keep_alive if keep_alive <= u64::from(u16::max_value()) => keep_alive as u16,
-						_ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "keep-alive too high")),
+					let keep_alive = match keep_alive {
+						keep_alive if keep_alive.as_secs() <= u64::from(u16::max_value()) => keep_alive.as_secs() as u16,
+						keep_alive => return Err(super::EncodeError::KeepAliveTooHigh(keep_alive)),
 					};
 					remaining_dst.append_u16_be(keep_alive);
 				}

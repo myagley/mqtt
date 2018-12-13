@@ -15,38 +15,41 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		subscription_updates_waiting_to_be_sent: Vec<super::SubscriptionUpdate>,
-	) -> std::io::Result<Vec<crate::proto::Packet>> {
+	) -> Result<Vec<crate::proto::Packet>, super::Error> {
 		match packet.take() {
 			Some(crate::proto::Packet::SubAck { packet_identifier, qos }) => {
 				let subscriptions =
 					self.subscriptions_waiting_to_be_acked.remove(&packet_identifier)
-					.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "received SUBACK for a SUBSCRIBE we never sent"))?;
+					.ok_or_else(|| super::Error::UnrecognizedSubAck(packet_identifier))?;
 
 				self.packet_identifiers.discard(packet_identifier);
 
 				if subscriptions.len() != qos.len() {
-					return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "SUBACK does not contain correct number of qos"));
+					return Err(super::Error::SubAckDoesNotContainEnoughQoS(packet_identifier, subscriptions.len(), qos.len()));
 				}
 
 				for (subscribe_to, qos) in subscriptions.into_iter().zip(qos) {
-					if qos < subscribe_to.qos {
-						return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!(
-							"{} requested QoS {:?} but SUBACK contains QoS {:?}",
-							subscribe_to.topic_filter,
-							subscribe_to.qos,
-							qos,
-						)));
-					}
+					match qos {
+						crate::proto::SubAckQos::Success(qos) => {
+							if qos < subscribe_to.qos {
+								return Err(super::Error::SubscriptionDowngraded(subscribe_to.topic_filter, subscribe_to.qos, qos));
+							}
 
-					log::debug!("Subscribed to {} with {:?}", subscribe_to.topic_filter, qos);
-					self.subscriptions.insert(subscribe_to.topic_filter, qos);
+							log::debug!("Subscribed to {} with {:?}", subscribe_to.topic_filter, qos);
+							self.subscriptions.insert(subscribe_to.topic_filter, qos);
+						},
+
+						crate::proto::SubAckQos::Failure => {
+							return Err(super::Error::SubscriptionFailed);
+						},
+					}
 				}
 			},
 
 			Some(crate::proto::Packet::UnsubAck { packet_identifier }) => {
 				let unsubscriptions =
 					self.unsubscriptions_waiting_to_be_acked.remove(&packet_identifier)
-					.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "received UNSUBACK for a UNSUBSCRIBE we never sent"))?;
+					.ok_or_else(|| super::Error::UnrecognizedUnsubAck(packet_identifier))?;
 
 				self.packet_identifiers.discard(packet_identifier);
 

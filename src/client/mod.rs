@@ -198,27 +198,45 @@ pub struct UpdateSubscriptionHandle(futures::sync::mpsc::Sender<SubscriptionUpda
 
 impl UpdateSubscriptionHandle {
 	/// Subscribe to a topic with the given parameters
-	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> std::io::Result<()> {
+	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> Result<(), UpdateSubscriptionError> {
 		self.update_subscription(SubscriptionUpdate::Subscribe(subscribe_to))
 	}
 
 	/// Unsubscribe from the given topic
-	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> std::io::Result<()> {
+	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> Result<(), UpdateSubscriptionError> {
 		self.update_subscription(SubscriptionUpdate::Unsubscribe(unsubscribe_from))
 	}
 
-	fn update_subscription(&mut self, subscription_update: SubscriptionUpdate) -> std::io::Result<()> {
+	fn update_subscription(&mut self, subscription_update: SubscriptionUpdate) -> Result<(), UpdateSubscriptionError> {
 		match self.0.try_send(subscription_update) {
 			Ok(()) => Ok(()),
 			Err(err) =>
 				if err.is_full() {
-					Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "not ready"))
+					Err(UpdateSubscriptionError::NotReady)
 				}
 				else {
-					Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "client does not exist"))
+					Err(UpdateSubscriptionError::ClientDoesNotExist)
 				},
 		}
 	}
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum UpdateSubscriptionError {
+	ClientDoesNotExist,
+	NotReady,
+}
+
+impl std::fmt::Display for UpdateSubscriptionError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			UpdateSubscriptionError::ClientDoesNotExist => write!(f, "client does not exist"),
+			UpdateSubscriptionError::NotReady => write!(f, "too many subscription updates queued"),
+		}
+	}
+}
+
+impl std::error::Error for UpdateSubscriptionError {
 }
 
 /// The kind of subscription update
@@ -233,7 +251,7 @@ pub struct PublishHandle(futures::sync::mpsc::Sender<PublishRequest>);
 
 impl PublishHandle {
 	/// Publish the given message to the server
-	pub fn publish(&mut self, publication: Publication) -> std::io::Result<impl Future<Item = (), Error = std::io::Error>> {
+	pub fn publish(&mut self, publication: Publication) -> Result<impl Future<Item = (), Error = PublishError>, PublishError> {
 		let (sender, receiver) = futures::sync::oneshot::channel();
 
 		match self.0.try_send(PublishRequest { publication, ack_sender: sender }) {
@@ -241,19 +259,36 @@ impl PublishHandle {
 				receiver
 				.then(|result| match result {
 					Ok(()) => Ok(()),
-					Err(futures::sync::oneshot::Canceled) => Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "sender dropped"))
+					Err(futures::sync::oneshot::Canceled) => Err(PublishError::ClientDoesNotExist)
 				})),
 
 			Err(err) =>
-				// TODO: When replacing with real error type, return Publication back so that caller can retry
 				if err.is_full() {
-					Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "not ready"))
+					Err(PublishError::NotReady(err.into_inner().publication))
 				}
 				else {
-					Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "client does not exist"))
+					Err(PublishError::ClientDoesNotExist)
 				},
 		}
 	}
+}
+
+#[derive(Debug)]
+pub enum PublishError {
+	ClientDoesNotExist,
+	NotReady(Publication),
+}
+
+impl std::fmt::Display for PublishError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
+			PublishError::NotReady(_) => write!(f, "too many publish requests queued"),
+		}
+	}
+}
+
+impl std::error::Error for PublishError {
 }
 
 #[derive(Debug)]
@@ -280,7 +315,7 @@ fn client_poll<S>(
 	ping: &mut self::ping::State,
 	publish: &mut self::publish::State,
 	subscriptions: &mut self::subscriptions::State,
-) -> futures::Poll<Vec<crate::Publication>, std::io::Error>
+) -> futures::Poll<Vec<crate::Publication>, Error>
 where
 	S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
 {
@@ -289,7 +324,7 @@ where
 	loop {
 		// Begin sending any packets waiting to be sent
 		while let Some(packet) = packets_waiting_to_be_sent.pop_front() {
-			match framed.start_send(packet)? {
+			match framed.start_send(packet).map_err(Error::EncodePacket)? {
 				futures::AsyncSink::Ready => (),
 
 				futures::AsyncSink::NotReady(packet) => {
@@ -302,17 +337,17 @@ where
 		// Finish sending any packets waiting to be sent.
 		//
 		// We don't care whether this returns Async::NotReady or Ready.
-		let _ = framed.poll_complete()?;
+		let _ = framed.poll_complete().map_err(Error::EncodePacket)?;
 
 		let mut continue_loop = false;
 
-		let mut packet = match framed.poll()? {
+		let mut packet = match framed.poll().map_err(Error::DecodePacket)? {
 			futures::Async::Ready(Some(packet)) => {
 				// May have more packets after this one, so keep looping
 				continue_loop = true;
 				Some(packet)
 			},
-			futures::Async::Ready(None) => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "connection closed by server")),
+			futures::Async::Ready(None) => return Err(Error::ServerClosedConnection),
 			futures::Async::NotReady => None,
 		};
 
@@ -346,7 +381,7 @@ where
 		let (new_publish_packets, new_publications_received) = publish.poll(
 			&mut packet,
 			publish_requests_waiting_to_be_sent,
-		)?;
+		);
 
 		publications_received.extend(new_publications_received);
 		new_packets_to_be_sent.extend(new_publish_packets);
@@ -422,6 +457,69 @@ impl Default for PacketIdentifiers {
 		PacketIdentifiers {
 			in_use: Default::default(),
 			previous: crate::proto::PacketIdentifier::max_value(),
+		}
+	}
+}
+
+#[derive(Debug)]
+pub enum Error {
+	ServerClosedConnection,
+	DecodePacket(crate::proto::DecodeError),
+	EncodePacket(crate::proto::EncodeError),
+	PingTimer(tokio::timer::Error),
+	SubAckDoesNotContainEnoughQoS(crate::proto::PacketIdentifier, usize, usize),
+	SubscriptionDowngraded(String, crate::proto::QoS, crate::proto::QoS),
+	SubscriptionFailed,
+	UnrecognizedSubAck(crate::proto::PacketIdentifier),
+	UnrecognizedUnsubAck(crate::proto::PacketIdentifier),
+}
+
+impl std::fmt::Display for Error {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			Error::ServerClosedConnection =>
+				write!(f, "connection closed by server"),
+
+			Error::DecodePacket(err) =>
+				write!(f, "could not decode packet: {}", err),
+
+			Error::EncodePacket(err) =>
+				write!(f, "could not encode packet: {}", err),
+
+			Error::PingTimer(err) =>
+				write!(f, "ping timer failed: {}", err),
+
+			Error::SubAckDoesNotContainEnoughQoS(packet_identifier, expected, actual) =>
+				write!(f, "Expected SUBACK {} to contain {} QoS's but it actually contained {}", packet_identifier, expected, actual),
+
+			Error::SubscriptionDowngraded(topic_name, expected, actual) =>
+				write!(f, "Server downgraded subscription for topic filter {:?} with QoS {:?} to {:?}", topic_name, expected, actual),
+
+			Error::SubscriptionFailed =>
+				write!(f, "Server rejected one or more subscriptions"),
+
+			Error::UnrecognizedSubAck(packet_identifier) =>
+				write!(f, "received SUBACK {} for SUBSCRIBE we never sent", packet_identifier),
+
+			Error::UnrecognizedUnsubAck(packet_identifier) =>
+				write!(f, "received UNSUBACK {} for UNSUBSCRIBE we never sent", packet_identifier),
+		}
+	}
+}
+
+impl std::error::Error for Error {
+	fn source(&self) -> Option<&(std::error::Error + 'static)> {
+		#[allow(clippy::match_same_arms)]
+		match self {
+			Error::ServerClosedConnection => None,
+			Error::DecodePacket(err) => Some(err),
+			Error::EncodePacket(err) => Some(err),
+			Error::PingTimer(err) => Some(err),
+			Error::SubAckDoesNotContainEnoughQoS(_, _, _) => None,
+			Error::SubscriptionDowngraded(_, _, _) => None,
+			Error::SubscriptionFailed => None,
+			Error::UnrecognizedSubAck(_) => None,
+			Error::UnrecognizedUnsubAck(_) => None,
 		}
 	}
 }

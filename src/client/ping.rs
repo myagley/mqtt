@@ -3,7 +3,6 @@ use futures::Future;
 pub(super) enum State {
 	BeginWaitingForNextPing,
 	WaitingForNextPing(tokio::timer::Delay),
-	Invalid,
 }
 
 impl State {
@@ -11,44 +10,32 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		keep_alive: std::time::Duration,
-	) -> futures::Poll<crate::proto::Packet, std::io::Error> {
+	) -> futures::Poll<crate::proto::Packet, super::Error> {
 		match packet.take() {
 			Some(crate::proto::Packet::PingResp) => *self = State::BeginWaitingForNextPing, // Reset ping timer
 			other => *packet = other,
 		}
 
-		let mut current_state = std::mem::replace(self, State::Invalid);
-
-		log::trace!("    {:?}", current_state);
-
 		loop {
-			let (next_state, result) = match current_state {
+			log::trace!("    {:?}", self);
+
+			match self {
 				State::BeginWaitingForNextPing => {
 					let ping_timer_deadline = std::time::Instant::now() + keep_alive / 2;
 					let ping_timer = tokio::timer::Delay::new(ping_timer_deadline);
-					(State::WaitingForNextPing(ping_timer), None)
+					*self = State::WaitingForNextPing(ping_timer);
 				},
 
-				State::WaitingForNextPing(mut ping_timer) => match ping_timer.poll().map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))? {
+				State::WaitingForNextPing(ping_timer) => match ping_timer.poll().map_err(super::Error::PingTimer)? {
 					futures::Async::Ready(()) => {
 						let packet = crate::proto::Packet::PingReq;
-						(State::BeginWaitingForNextPing, Some(Ok(futures::Async::Ready(packet))))
+						*self = State::BeginWaitingForNextPing;
+						return Ok(futures::Async::Ready(packet));
 					},
 
 					futures::Async::NotReady =>
-						(State::WaitingForNextPing(ping_timer), Some(Ok(futures::Async::NotReady))),
+						return Ok(futures::Async::NotReady),
 				},
-
-				State::Invalid =>
-					(State::Invalid, Some(Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "polled in invalid state")))),
-			};
-			current_state = next_state;
-
-			log::trace!("--> {:?}", current_state);
-
-			if let Some(result) = result {
-				*self = current_state;
-				return result;
 			}
 		}
 	}
@@ -63,7 +50,6 @@ impl std::fmt::Debug for State {
 		match self {
 			State::BeginWaitingForNextPing => f.write_str("BeginWaitingForNextPing"),
 			State::WaitingForNextPing { .. } => f.write_str("WaitingForNextPing"),
-			State::Invalid => f.write_str("Invalid"),
 		}
 	}
 }
