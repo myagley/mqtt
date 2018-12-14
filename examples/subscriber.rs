@@ -1,18 +1,60 @@
+// Example:
+//
+//     cargo run --example subscriber -- --server 127.0.0.1:1883 --client-id 'example-subscriber' --topic-filter foo --qos 'AtLeastOnce'
+
 use futures::{ Future, Stream };
+
+#[derive(Debug, structopt_derive::StructOpt)]
+struct Options {
+	#[structopt(help = "Address of the MQTT server.", long = "server")]
+	server: std::net::SocketAddr,
+
+	#[structopt(help = "Client ID used to identify this application to the server. If not given, a server-generated ID will be used.", long = "client-id")]
+	client_id: Option<String>,
+
+	#[structopt(help = "Username used to authenticate with the server, if any.", long = "username")]
+	username: Option<String>,
+
+	#[structopt(help = "Password used to authenticate with the server, if any.", long = "password")]
+	password: Option<String>,
+
+	#[structopt(help = "Maximum back-off time between reconnections to the server, in seconds.", long = "max-reconnect-back-off", default_value = "30")]
+	max_reconnect_back_off: u64,
+
+	#[structopt(help = "Keep-alive time advertised to the server, in seconds.", long = "keep-alive", default_value = "5")]
+	keep_alive: u64,
+
+	#[structopt(help = "The topic filter to subscribe to.", long = "topic-filter")]
+	topic_filter: String,
+
+	#[structopt(help = "The QoS with which to subscribe to the topic.", long = "qos", parse(from_str = "qos_from_str"))]
+	qos: mqtt::proto::QoS,
+}
 
 fn main() {
 	env_logger::Builder::from_env("MQTT_LOG").init();
+
+	let Options {
+		server,
+		client_id,
+		username,
+		password,
+		max_reconnect_back_off,
+		keep_alive,
+		topic_filter,
+		qos,
+	} = structopt::StructOpt::from_args();
 
 	let mut runtime = tokio::runtime::Runtime::new().expect("couldn't initialize tokio runtime");
 
 	let client =
 		mqtt::Client::new(
-			Some("example-subscriber".to_string()),
-			None,
-			None,
-			|| tokio::net::TcpStream::connect(&std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)), 1884)),
-			std::time::Duration::from_secs(30),
-			std::time::Duration::from_secs(5),
+			client_id,
+			username,
+			password,
+			move || tokio::net::TcpStream::connect(&server),
+			std::time::Duration::from_secs(max_reconnect_back_off),
+			std::time::Duration::from_secs(keep_alive),
 			10,
 			10,
 		);
@@ -21,22 +63,41 @@ fn main() {
 	runtime.spawn(
 		update_subscription_handle
 		.subscribe(mqtt::proto::SubscribeTo {
-			topic_filter: "foo".to_string(),
-			qos: mqtt::proto::QoS::AtLeastOnce,
+			topic_filter,
+			qos,
 		})
 		.map_err(|err| panic!("couldn't update subscription: {}", err)));
 
 	let f = client.for_each(|publications| {
 		for publication in publications {
-			log::info!(
-				"Received publication: {:?} {:?} {:?}",
-				publication.topic_name,
-				std::str::from_utf8(&publication.payload).expect("test payloads are valid str"),
-				publication.qos,
-			);
+			match std::str::from_utf8(&publication.payload) {
+				Ok(s) =>
+					log::info!(
+						"Received publication: {:?} {:?} {:?}",
+						publication.topic_name,
+						s,
+						publication.qos,
+					),
+				Err(_) =>
+					log::info!(
+						"Received publication: {:?} {:?} {:?}",
+						publication.topic_name,
+						publication.payload,
+						publication.qos,
+					),
+			}
 		}
 		Ok(())
 	});
 
 	runtime.block_on(f).expect("subscriber failed");
+}
+
+fn qos_from_str(s: &str) -> mqtt::proto::QoS {
+	match s {
+		"0" | "AtMostOnce" => mqtt::proto::QoS::AtMostOnce,
+		"1" | "AtLeastOnce" => mqtt::proto::QoS::AtLeastOnce,
+		"2" | "ExactlyOnce" => mqtt::proto::QoS::ExactlyOnce,
+		s => panic!("unrecognized QoS {:?}: must be one of 0, 1, 2, AtMostOnce, AtLeastOnce, ExactlyOnce", s),
+	}
 }
