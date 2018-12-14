@@ -111,9 +111,9 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	}
 }
 
-impl<IoS> Stream for Client<IoS> where IoS: IoSource<Error = std::io::Error> {
+impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future as Future>::Error: std::fmt::Display {
 	type Item = Vec<crate::Publication>;
-	type Error = std::io::Error;
+	type Error = Error;
 
 	fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
 		loop {
@@ -122,9 +122,10 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource<Error = std::io::Error> {
 				self.password.as_ref().map(AsRef::as_ref),
 				&mut self.client_id,
 				self.keep_alive,
-			)? {
-				futures::Async::Ready(framed) => framed,
-				futures::Async::NotReady => return Ok(futures::Async::NotReady),
+			) {
+				Ok(futures::Async::Ready(framed)) => framed,
+				Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
+				Err(()) => unreachable!(),
 			};
 
 			if new_connection {
@@ -151,6 +152,7 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource<Error = std::io::Error> {
 			) {
 				Ok(futures::Async::Ready(result)) => break Ok(futures::Async::Ready(Some(result))),
 				Ok(futures::Async::NotReady) => break Ok(futures::Async::NotReady),
+				Err(err @ Error::EncodePacket(_)) => break Err(err), // User error, not recoverable
 				Err(err) => {
 					log::warn!("client will reconnect because of error: {}", err);
 					self.connect.reconnect();
@@ -167,11 +169,8 @@ pub trait IoSource {
 	/// The I/O object
 	type Io: tokio::io::AsyncRead + tokio::io::AsyncWrite;
 
-	/// The error returned by the connection future
-	type Error: std::error::Error;
-
 	/// The connection future
-	type Future: Future<Item = Self::Io, Error = Self::Error>;
+	type Future: Future<Item = Self::Io>;
 
 	/// Attempts the connection and returns a [`Future`] that resolves when the connection succeeds
 	fn connect(&mut self) -> Self::Future;
@@ -182,10 +181,8 @@ where
 	F: FnMut() -> A,
 	A: Future,
 	<A as Future>::Item: tokio::io::AsyncRead + tokio::io::AsyncWrite,
-	<A as Future>::Error: std::error::Error,
 {
 	type Io = <A as Future>::Item;
-	type Error = <A as Future>::Error;
 	type Future = A;
 
 	fn connect(&mut self) -> Self::Future {

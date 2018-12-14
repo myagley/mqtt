@@ -63,14 +63,14 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource {
 	}
 }
 
-impl<IoS> Connect<IoS> where IoS: super::IoSource {
+impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Future as Future>::Error: std::fmt::Display {
 	pub(super) fn poll<'a>(
 		&'a mut self,
 		username: Option<&str>,
 		password: Option<&str>,
 		client_id: &mut crate::proto::ClientId,
 		keep_alive: std::time::Duration,
-	) -> futures::Poll<Connected<'a, IoS>, <IoS as super::IoSource>::Error> {
+	) -> futures::Poll<Connected<'a, IoS>, ()> {
 		let mut current_state = std::mem::replace(&mut self.state, State::Invalid);
 
 		log::trace!("    {:?}", current_state);
