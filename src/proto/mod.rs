@@ -6,7 +6,7 @@ use bytes::{ Buf, BufMut, IntoBuf };
 
 mod packet;
 
-pub use self::packet::{ Packet, PacketCodec, PacketIdentifier, PacketIdentifierDupQoS, QoS, SubAckQos, SubscribeTo };
+pub use self::packet::{ Packet, PacketCodec, PacketIdentifierDupQoS, QoS, SubAckQos, SubscribeTo };
 
 /// The client ID
 ///
@@ -229,6 +229,54 @@ impl tokio::codec::Encoder for RemainingLengthCodec {
 	}
 }
 
+/// A packet identifier. Two-byte unsigned integer that cannot be zero.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PacketIdentifier(u16);
+
+impl PacketIdentifier {
+	/// Returns the largest value that is a valid packet identifier.
+	pub const fn max_value() -> Self {
+		PacketIdentifier(u16::max_value())
+	}
+
+	/// Convert the given raw packet identifier into this type.
+	#[allow(clippy::new_ret_no_self)] // Clippy bug
+	pub fn new(raw: u16) -> Option<Self> {
+		match raw {
+			0 => None,
+			raw => Some(PacketIdentifier(raw)),
+		}
+	}
+
+	/// Get the raw packet identifier.
+	pub fn get(self) -> u16 {
+		self.0
+	}
+}
+
+impl std::fmt::Display for PacketIdentifier {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		self.0.fmt(f)
+	}
+}
+
+impl std::ops::Add<u16> for PacketIdentifier {
+	type Output = Self;
+
+	fn add(self, other: u16) -> Self::Output {
+		PacketIdentifier(match std::num::Wrapping(self.0) + std::num::Wrapping(other) {
+			std::num::Wrapping(0) => 1,
+			std::num::Wrapping(value) => value,
+		})
+	}
+}
+
+impl std::ops::AddAssign<u16> for PacketIdentifier {
+	fn add_assign(&mut self, other: u16) {
+		*self = *self + other;
+	}
+}
+
 #[derive(Debug)]
 pub enum DecodeError {
 	IncompletePacket,
@@ -340,6 +388,7 @@ trait BufMutExt {
 
 	fn append_u8(&mut self, n: u8);
 	fn append_u16_be(&mut self, n: u16);
+	fn append_packet_identifier(&mut self, packet_identifier: PacketIdentifier);
 }
 
 impl BufMutExt for bytes::BytesMut {
@@ -369,6 +418,11 @@ impl BufMutExt for bytes::BytesMut {
 	fn append_u16_be(&mut self, n: u16) {
 		self.reserve(std::mem::size_of::<u16>());
 		self.put_u16_be(n);
+	}
+
+	fn append_packet_identifier(&mut self, packet_identifier: PacketIdentifier) {
+		self.reserve(std::mem::size_of::<u16>());
+		self.put_u16_be(packet_identifier.0);
 	}
 }
 

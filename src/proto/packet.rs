@@ -26,12 +26,12 @@ pub enum Packet {
 
 	/// Ref: 3.4 PUBACK – Publish acknowledgement
 	PubAck {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 	},
 
 	/// Ref: 3.7 PUBCOMP – Publish complete (QoS 2 publish received, part 3)
 	PubComp {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 	},
 
 	/// 3.3 PUBLISH – Publish message
@@ -44,34 +44,34 @@ pub enum Packet {
 
 	/// Ref: 3.5 PUBREC – Publish received (QoS 2 publish received, part 1)
 	PubRec {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 	},
 
 	/// Ref: 3.6 PUBREL – Publish release (QoS 2 publish received, part 2)
 	PubRel {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 	},
 
 	/// Ref: 3.9 SUBACK – Subscribe acknowledgement
 	SubAck {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 		qos: Vec<SubAckQos>,
 	},
 
 	/// Ref: 3.8 SUBSCRIBE - Subscribe to topics
 	Subscribe {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 		subscribe_to: Vec<SubscribeTo>,
 	},
 
 	/// Ref: 3.11 UNSUBACK – Unsubscribe acknowledgement
 	UnsubAck {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 	},
 
 	/// Ref: 3.10 UNSUBSCRIBE – Unsubscribe from topics
 	Unsubscribe {
-		packet_identifier: PacketIdentifier,
+		packet_identifier: super::PacketIdentifier,
 		unsubscribe_from: Vec<String>,
 	},
 }
@@ -123,56 +123,8 @@ impl Packet {
 #[derive(Clone, Copy, Debug)]
 pub enum PacketIdentifierDupQoS {
 	AtMostOnce,
-	AtLeastOnce(PacketIdentifier, bool),
-	ExactlyOnce(PacketIdentifier, bool),
-}
-
-/// A packet identifier. Two-byte unsigned integer that cannot be zero.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct PacketIdentifier(u16);
-
-impl PacketIdentifier {
-	/// Returns the largest value that is a valid packet identifier.
-	pub const fn max_value() -> Self {
-		PacketIdentifier(u16::max_value())
-	}
-
-	/// Convert the given raw packet identifier into this type.
-	#[allow(clippy::new_ret_no_self)] // Clippy bug
-	pub fn new(raw: u16) -> Option<Self> {
-		match raw {
-			0 => None,
-			raw => Some(PacketIdentifier(raw)),
-		}
-	}
-
-	/// Get the raw packet identifier.
-	pub fn get(self) -> u16 {
-		self.0
-	}
-}
-
-impl std::fmt::Display for PacketIdentifier {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		self.0.fmt(f)
-	}
-}
-
-impl std::ops::Add<u16> for PacketIdentifier {
-	type Output = Self;
-
-	fn add(self, other: u16) -> Self::Output {
-		PacketIdentifier(match std::num::Wrapping(self.0) + std::num::Wrapping(other) {
-			std::num::Wrapping(0) => 1,
-			std::num::Wrapping(value) => value,
-		})
-	}
-}
-
-impl std::ops::AddAssign<u16> for PacketIdentifier {
-	fn add_assign(&mut self, other: u16) {
-		*self = *self + other;
-	}
+	AtLeastOnce(super::PacketIdentifier, bool),
+	ExactlyOnce(super::PacketIdentifier, bool),
 }
 
 /// A subscription request.
@@ -286,7 +238,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::PUBACK, 0, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -298,7 +250,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::PUBCOMP, 0, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -319,7 +271,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 					0x01 => {
 						let packet_identifier = src.try_get_u16_be()?;
-						let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+						let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 							Some(packet_identifier) => packet_identifier,
 							None => return Err(super::DecodeError::ZeroPacketIdentifier),
 						};
@@ -328,7 +280,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 					0x02 => {
 						let packet_identifier = src.try_get_u16_be()?;
-						let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+						let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 							Some(packet_identifier) => packet_identifier,
 							None => return Err(super::DecodeError::ZeroPacketIdentifier),
 						};
@@ -351,7 +303,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::PUBREC, 0, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -363,7 +315,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::PUBREL, 2, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -375,7 +327,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::SUBACK, 0, remaining_length) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -399,7 +351,7 @@ impl tokio::codec::Decoder for PacketCodec {
 
 			(Packet::UNSUBACK, 0, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
-				let packet_identifier = match PacketIdentifier::new(packet_identifier) {
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
 					Some(packet_identifier) => packet_identifier,
 					None => return Err(super::DecodeError::ZeroPacketIdentifier),
 				};
@@ -476,13 +428,13 @@ impl tokio::codec::Encoder for PacketCodec {
 			Packet::PubAck { packet_identifier } => {
 				dst.append_u8(Packet::PUBACK);
 				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
-				dst.append_u16_be(packet_identifier.get());
+				dst.append_packet_identifier(packet_identifier);
 			},
 
 			Packet::PubComp { packet_identifier } => {
 				dst.append_u8(Packet::PUBCOMP);
 				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
-				dst.append_u16_be(packet_identifier.get());
+				dst.append_packet_identifier(packet_identifier);
 			},
 
 			Packet::Publish { packet_identifier_dup_qos, retain, topic_name, payload } => {
@@ -506,9 +458,8 @@ impl tokio::codec::Encoder for PacketCodec {
 				match packet_identifier_dup_qos {
 					PacketIdentifierDupQoS::AtMostOnce => (),
 					PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) |
-					PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
-						remaining_dst.append_u16_be(packet_identifier.get());
-					},
+					PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) =>
+						remaining_dst.append_packet_identifier(packet_identifier),
 				}
 
 				remaining_dst.extend_from_slice(&payload);
@@ -520,13 +471,13 @@ impl tokio::codec::Encoder for PacketCodec {
 			Packet::PubRec { packet_identifier } => {
 				dst.append_u8(Packet::PUBREC);
 				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
-				dst.append_u16_be(packet_identifier.get());
+				dst.append_packet_identifier(packet_identifier);
 			},
 
 			Packet::PubRel { packet_identifier } => {
 				dst.append_u8(Packet::PUBREL);
 				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
-				dst.append_u16_be(packet_identifier.get());
+				dst.append_packet_identifier(packet_identifier);
 			},
 
 			Packet::PingReq => {
@@ -543,7 +494,7 @@ impl tokio::codec::Encoder for PacketCodec {
 
 				let mut remaining_dst = bytes::BytesMut::new();
 
-				remaining_dst.append_u16_be(packet_identifier.get());
+				remaining_dst.append_packet_identifier(packet_identifier);
 
 				for SubscribeTo { topic_filter, qos } in subscribe_to {
 					super::Utf8StringCodec::default().encode(topic_filter, &mut remaining_dst)?;
@@ -561,7 +512,7 @@ impl tokio::codec::Encoder for PacketCodec {
 
 				let mut remaining_dst = bytes::BytesMut::new();
 
-				remaining_dst.append_u16_be(packet_identifier.get());
+				remaining_dst.append_packet_identifier(packet_identifier);
 
 				for unsubscribe_from in unsubscribe_from {
 					super::Utf8StringCodec::default().encode(unsubscribe_from, &mut remaining_dst)?;
