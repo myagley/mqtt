@@ -293,6 +293,18 @@ pub enum EncodeError {
 	StringTooLarge(usize),
 }
 
+impl EncodeError {
+	pub fn is_user_error(&self) -> bool {
+		#[allow(clippy::match_same_arms)]
+		match self {
+			EncodeError::Io(_) => false,
+			EncodeError::KeepAliveTooHigh(_) => true,
+			EncodeError::RemainingLengthTooHigh(_) => true,
+			EncodeError::StringTooLarge(_) => true,
+		}
+	}
+}
+
 impl std::fmt::Display for EncodeError {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {

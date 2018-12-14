@@ -152,8 +152,17 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 			) {
 				Ok(futures::Async::Ready(result)) => break Ok(futures::Async::Ready(Some(result))),
 				Ok(futures::Async::NotReady) => break Ok(futures::Async::NotReady),
-				Err(err @ Error::EncodePacket(_)) => break Err(err), // User error, not recoverable
 				Err(err) => {
+					let err = match err {
+						Error::EncodePacket(err) =>
+							if err.is_user_error() {
+								break Err(Error::EncodePacket(err));
+							}
+							else {
+								Error::EncodePacket(err)
+							},
+						err => err,
+					};
 					log::warn!("client will reconnect because of error: {}", err);
 					self.connect.reconnect();
 				},
