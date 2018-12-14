@@ -1,8 +1,4 @@
-use std::io::Read;
-
-use bytes::{ Buf, IntoBuf };
-
-use super::{ BufExt, BufMutExt };
+use super::BufMutExt;
 
 /// An MQTT packet
 #[derive(Clone, Debug)]
@@ -218,39 +214,57 @@ pub enum SubAckQos {
 ///
 /// Ref: 2 MQTT Control Packet format
 #[derive(Debug, Default)]
-pub struct PacketCodec;
+pub struct PacketCodec {
+	decoder_state: PacketDecoderState,
+}
+
+#[derive(Debug)]
+pub enum PacketDecoderState {
+	Empty,
+	HaveFirstByte { first_byte: u8, remaining_length: super::RemainingLengthCodec },
+	HaveFixedHeader { first_byte: u8, remaining_length: usize },
+}
+
+impl Default for PacketDecoderState {
+	fn default() -> Self {
+		PacketDecoderState::Empty
+	}
+}
 
 impl tokio::codec::Decoder for PacketCodec {
 	type Item = Packet;
 	type Error = super::DecodeError;
 
 	fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-		let (first_byte, remaining_length, end_of_fixed_header) = {
-			let mut src = std::io::Cursor::new(&**src);
-			let first_byte =
-				if src.remaining() >= std::mem::size_of::<u8>() {
-					src.get_u8()
-				}
-				else {
-					return Ok(None);
-				};
-			let remaining_length = match super::RemainingLengthCodec::decode(&mut src)? {
-				Some(remaining_length) => remaining_length,
-				None => return Ok(None),
-			};
+		let (first_byte, mut src) = loop {
+			match &mut self.decoder_state {
+				PacketDecoderState::Empty => {
+					let first_byte = match src.try_get_u8() {
+						Ok(first_byte) => first_byte,
+						Err(_) => return Ok(None),
+					};
+					self.decoder_state = PacketDecoderState::HaveFirstByte { first_byte, remaining_length: Default::default() };
+				},
 
-			if src.remaining() < remaining_length as usize {
-				return Ok(None);
+				PacketDecoderState::HaveFirstByte { first_byte, remaining_length } => match remaining_length.decode(src)? {
+					Some(remaining_length) => self.decoder_state = PacketDecoderState::HaveFixedHeader { first_byte: *first_byte, remaining_length },
+					None => return Ok(None),
+				},
+
+				PacketDecoderState::HaveFixedHeader { first_byte, remaining_length } => {
+					if src.len() < *remaining_length {
+						return Ok(None);
+					}
+
+					let first_byte = *first_byte;
+					let src = src.split_to(*remaining_length);
+					self.decoder_state = PacketDecoderState::Empty;
+					break (first_byte, src);
+				},
 			}
-
-			#[allow(clippy::cast_possible_truncation)]
-			(first_byte, remaining_length, src.position() as usize)
 		};
 
-		let _ = src.split_to(end_of_fixed_header);
-		let mut src = src.split_to(remaining_length).into_buf();
-
-		match (first_byte & 0xF0, first_byte & 0x0F, remaining_length) {
+		match (first_byte & 0xF0, first_byte & 0x0F, src.len()) {
 			(Packet::CONNACK, 0, 2) => {
 				let flags = src.try_get_u8()?;
 				let session_present = match flags {
@@ -298,7 +312,7 @@ impl tokio::codec::Decoder for PacketCodec {
 				let dup = (flags & 0x08) != 0;
 				let retain = (flags & 0x01) != 0;
 
-				let topic_name = super::Utf8StringCodec::decode(&mut src)?;
+				let topic_name = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
 
 				let packet_identifier_dup_qos = match (flags & 0x06) >> 1 {
 					0x00 => PacketIdentifierDupQoS::AtMostOnce,
@@ -324,8 +338,8 @@ impl tokio::codec::Decoder for PacketCodec {
 					qos => return Err(super::DecodeError::UnrecognizedQoS(qos)),
 				};
 
-				let mut payload = Vec::with_capacity(src.remaining());
-				src.read_to_end(&mut payload)?;
+				let mut payload = vec![0_u8; src.len()];
+				payload.copy_from_slice(&src.take());
 
 				Ok(Some(Packet::Publish {
 					packet_identifier_dup_qos,
@@ -444,30 +458,30 @@ impl tokio::codec::Encoder for PacketCodec {
 					remaining_dst.append_u16_be(keep_alive);
 				}
 				match client_id {
-					super::ClientId::ServerGenerated => super::Utf8StringCodec.encode("".to_string(), &mut remaining_dst)?,
+					super::ClientId::ServerGenerated => super::Utf8StringCodec::default().encode("".to_string(), &mut remaining_dst)?,
 					super::ClientId::IdWithCleanSession(id) |
-					super::ClientId::IdWithExistingSession(id) => super::Utf8StringCodec.encode(id, &mut remaining_dst)?,
+					super::ClientId::IdWithExistingSession(id) => super::Utf8StringCodec::default().encode(id, &mut remaining_dst)?,
 				}
 				if let Some(username) = username {
-					super::Utf8StringCodec.encode(username, &mut remaining_dst)?
+					super::Utf8StringCodec::default().encode(username, &mut remaining_dst)?
 				}
 				if let Some(password) = password {
-					super::Utf8StringCodec.encode(password, &mut remaining_dst)?
+					super::Utf8StringCodec::default().encode(password, &mut remaining_dst)?
 				}
 
-				super::RemainingLengthCodec.encode(remaining_dst.len(), dst)?;
-				dst.extend_from_slice(&*remaining_dst);
+				super::RemainingLengthCodec::default().encode(remaining_dst.len(), dst)?;
+				dst.extend_from_slice(&remaining_dst);
 			},
 
 			Packet::PubAck { packet_identifier } => {
 				dst.append_u8(Packet::PUBACK);
-				super::RemainingLengthCodec.encode(std::mem::size_of::<u16>(), dst)?;
+				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
 				dst.append_u16_be(packet_identifier.get());
 			},
 
 			Packet::PubComp { packet_identifier } => {
 				dst.append_u8(Packet::PUBCOMP);
-				super::RemainingLengthCodec.encode(std::mem::size_of::<u16>(), dst)?;
+				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
 				dst.append_u16_be(packet_identifier.get());
 			},
 
@@ -487,7 +501,7 @@ impl tokio::codec::Encoder for PacketCodec {
 
 				let mut remaining_dst = bytes::BytesMut::new();
 
-				super::Utf8StringCodec.encode(topic_name, &mut remaining_dst)?;
+				super::Utf8StringCodec::default().encode(topic_name, &mut remaining_dst)?;
 
 				match packet_identifier_dup_qos {
 					PacketIdentifierDupQoS::AtMostOnce => (),
@@ -499,19 +513,19 @@ impl tokio::codec::Encoder for PacketCodec {
 
 				remaining_dst.extend_from_slice(&payload);
 
-				super::RemainingLengthCodec.encode(remaining_dst.len(), dst)?;
-				dst.extend_from_slice(&*remaining_dst);
+				super::RemainingLengthCodec::default().encode(remaining_dst.len(), dst)?;
+				dst.extend_from_slice(&remaining_dst);
 			},
 
 			Packet::PubRec { packet_identifier } => {
 				dst.append_u8(Packet::PUBREC);
-				super::RemainingLengthCodec.encode(std::mem::size_of::<u16>(), dst)?;
+				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
 				dst.append_u16_be(packet_identifier.get());
 			},
 
 			Packet::PubRel { packet_identifier } => {
 				dst.append_u8(Packet::PUBREL);
-				super::RemainingLengthCodec.encode(std::mem::size_of::<u16>(), dst)?;
+				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
 				dst.append_u16_be(packet_identifier.get());
 			},
 
@@ -532,12 +546,12 @@ impl tokio::codec::Encoder for PacketCodec {
 				remaining_dst.append_u16_be(packet_identifier.get());
 
 				for SubscribeTo { topic_filter, qos } in subscribe_to {
-					super::Utf8StringCodec.encode(topic_filter, &mut remaining_dst)?;
+					super::Utf8StringCodec::default().encode(topic_filter, &mut remaining_dst)?;
 					remaining_dst.append_u8(qos.into());
 				}
 
-				super::RemainingLengthCodec.encode(remaining_dst.len(), dst)?;
-				dst.extend_from_slice(&*remaining_dst);
+				super::RemainingLengthCodec::default().encode(remaining_dst.len(), dst)?;
+				dst.extend_from_slice(&remaining_dst);
 			},
 
 			Packet::UnsubAck { .. } => unimplemented!(),
@@ -550,11 +564,11 @@ impl tokio::codec::Encoder for PacketCodec {
 				remaining_dst.append_u16_be(packet_identifier.get());
 
 				for unsubscribe_from in unsubscribe_from {
-					super::Utf8StringCodec.encode(unsubscribe_from, &mut remaining_dst)?;
+					super::Utf8StringCodec::default().encode(unsubscribe_from, &mut remaining_dst)?;
 				}
 
-				super::RemainingLengthCodec.encode(remaining_dst.len(), dst)?;
-				dst.extend_from_slice(&*remaining_dst);
+				super::RemainingLengthCodec::default().encode(remaining_dst.len(), dst)?;
+				dst.extend_from_slice(&remaining_dst);
 			},
 		}
 
