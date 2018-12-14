@@ -320,3 +320,87 @@ impl BufMutExt for bytes::BytesMut {
 		self.put_u16_be(n);
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn remaining_length_encode() {
+		remaining_length_encode_inner_ok(0x00, &[0x00]);
+		remaining_length_encode_inner_ok(0x01, &[0x01]);
+
+		remaining_length_encode_inner_ok(0x7F, &[0x7F]);
+		remaining_length_encode_inner_ok(0x80, &[0x80, 0x01]);
+		remaining_length_encode_inner_ok(0x3FFF, &[0xFF, 0x7F]);
+		remaining_length_encode_inner_ok(0x4000, &[0x80, 0x80, 0x01]);
+		remaining_length_encode_inner_ok(0x001F_FFFF, &[0xFF, 0xFF, 0x7F]);
+		remaining_length_encode_inner_ok(0x0020_0000, &[0x80, 0x80, 0x80, 0x01]);
+		remaining_length_encode_inner_ok(0x0FFF_FFFF, &[0xFF, 0xFF, 0xFF, 0x7F]);
+
+		remaining_length_encode_inner_too_high(0x1000_0000);
+		remaining_length_encode_inner_too_high(0xFFFF_FFFF);
+		remaining_length_encode_inner_too_high(0xFFFF_FFFF_FFFF_FFFF);
+	}
+
+	fn remaining_length_encode_inner_ok(value: usize, expected: &[u8]) {
+		use tokio::codec::Encoder;
+
+		let mut bytes = bytes::BytesMut::new();
+		super::RemainingLengthCodec.encode(value, &mut bytes).unwrap();
+		assert_eq!(&*bytes, expected);
+	}
+
+	fn remaining_length_encode_inner_too_high(value: usize) {
+		use tokio::codec::Encoder;
+
+		let mut bytes = bytes::BytesMut::new();
+		let err = super::RemainingLengthCodec.encode(value, &mut bytes).unwrap_err();
+		if let super::EncodeError::RemainingLengthTooHigh(v) = err {
+			assert_eq!(v, value);
+		}
+		else {
+			panic!("{:?}", err);
+		}
+	}
+
+	#[test]
+	fn remaining_length_decode() {
+		remaining_length_decode_inner_ok(&[0x00], 0x00);
+		remaining_length_decode_inner_ok(&[0x01], 0x01);
+
+		remaining_length_decode_inner_ok(&[0x7F], 0x7F);
+		remaining_length_decode_inner_ok(&[0x80, 0x01], 0x80);
+		remaining_length_decode_inner_ok(&[0xFF, 0x7F], 0x3FFF);
+		remaining_length_decode_inner_ok(&[0x80, 0x80, 0x01], 0x4000);
+		remaining_length_decode_inner_ok(&[0xFF, 0xFF, 0x7F], 0x001F_FFFF);
+		remaining_length_decode_inner_ok(&[0x80, 0x80, 0x80, 0x01], 0x0020_0000);
+		remaining_length_decode_inner_ok(&[0xFF, 0xFF, 0xFF, 0x7F], 0x0FFF_FFFF);
+
+		remaining_length_decode_inner_too_high(&[0x80, 0x80, 0x80, 0x80]);
+		remaining_length_decode_inner_too_high(&[0xFF, 0xFF, 0xFF, 0xFF]);
+
+		remaining_length_decode_inner_incomplete_packet(&[0x80]);
+		remaining_length_decode_inner_incomplete_packet(&[0x80, 0x80]);
+		remaining_length_decode_inner_incomplete_packet(&[0x80, 0x80, 0x80]);
+	}
+
+	fn remaining_length_decode_inner_ok(bytes: &[u8], expected: usize) {
+		let mut bytes = std::io::Cursor::new(bytes);
+		let actual = super::RemainingLengthCodec::decode(&mut bytes).unwrap().unwrap();
+		assert_eq!(actual, expected);
+	}
+
+	fn remaining_length_decode_inner_too_high(bytes: &[u8]) {
+		let mut bytes = std::io::Cursor::new(bytes);
+		let err = super::RemainingLengthCodec::decode(&mut bytes).unwrap_err();
+		if let super::DecodeError::RemainingLengthTooHigh = err {
+		}
+		else {
+			panic!("{:?}", err);
+		}
+	}
+
+	fn remaining_length_decode_inner_incomplete_packet(bytes: &[u8]) {
+		let mut bytes = std::io::Cursor::new(bytes);
+		assert_eq!(super::RemainingLengthCodec::decode(&mut bytes).unwrap(), None);
+	}
+}
