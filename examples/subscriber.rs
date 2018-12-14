@@ -1,4 +1,4 @@
-use futures::Stream;
+use futures::{ Future, Stream };
 
 fn main() {
 	env_logger::Builder::from_env("MQTT_LOG").init();
@@ -18,12 +18,13 @@ fn main() {
 		);
 
 	let mut update_subscription_handle = client.update_subscription_handle();
-	update_subscription_handle
+	runtime.spawn(
+		update_subscription_handle
 		.subscribe(mqtt::proto::SubscribeTo {
 			topic_filter: "foo".to_string(),
 			qos: mqtt::proto::QoS::AtLeastOnce,
 		})
-		.expect("couldn't update subscription");
+		.map_err(|err| panic!("couldn't update subscription: {}", err)));
 
 	let f = client.for_each(|publications| {
 		for publication in publications {

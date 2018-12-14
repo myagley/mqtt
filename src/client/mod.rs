@@ -198,26 +198,23 @@ pub struct UpdateSubscriptionHandle(futures::sync::mpsc::Sender<SubscriptionUpda
 
 impl UpdateSubscriptionHandle {
 	/// Subscribe to a topic with the given parameters
-	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> Result<(), UpdateSubscriptionError> {
-		self.update_subscription(SubscriptionUpdate::Subscribe(subscribe_to))
+	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
+		self.0.clone()
+			.send(SubscriptionUpdate::Subscribe(subscribe_to))
+			.then(|result| match result {
+				Ok(_) => Ok(()),
+				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
+			})
 	}
 
 	/// Unsubscribe from the given topic
-	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> Result<(), UpdateSubscriptionError> {
-		self.update_subscription(SubscriptionUpdate::Unsubscribe(unsubscribe_from))
-	}
-
-	fn update_subscription(&mut self, subscription_update: SubscriptionUpdate) -> Result<(), UpdateSubscriptionError> {
-		match self.0.try_send(subscription_update) {
-			Ok(()) => Ok(()),
-			Err(err) =>
-				if err.is_full() {
-					Err(UpdateSubscriptionError::NotReady)
-				}
-				else {
-					Err(UpdateSubscriptionError::ClientDoesNotExist)
-				},
-		}
+	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
+		self.0.clone()
+			.send(SubscriptionUpdate::Unsubscribe(unsubscribe_from))
+			.then(|result| match result {
+				Ok(_) => Ok(()),
+				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
+			})
 	}
 }
 
@@ -251,25 +248,16 @@ pub struct PublishHandle(futures::sync::mpsc::Sender<PublishRequest>);
 
 impl PublishHandle {
 	/// Publish the given message to the server
-	pub fn publish(&mut self, publication: Publication) -> Result<impl Future<Item = (), Error = PublishError>, PublishError> {
-		let (sender, receiver) = futures::sync::oneshot::channel();
+	pub fn publish(&mut self, publication: Publication) -> impl Future<Item = (), Error = PublishError> {
+		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
 
-		match self.0.try_send(PublishRequest { publication, ack_sender: sender }) {
-			Ok(()) => Ok(
-				receiver
-				.then(|result| match result {
-					Ok(()) => Ok(()),
-					Err(futures::sync::oneshot::Canceled) => Err(PublishError::ClientDoesNotExist)
-				})),
-
-			Err(err) =>
-				if err.is_full() {
-					Err(PublishError::NotReady(err.into_inner().publication))
-				}
-				else {
-					Err(PublishError::ClientDoesNotExist)
-				},
-		}
+		self.0.clone()
+			.send(PublishRequest { publication, ack_sender })
+			.then(|result| match result {
+				Ok(_) => Ok(ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)),
+				Err(_) => Err(PublishError::ClientDoesNotExist)
+			})
+			.flatten()
 	}
 }
 

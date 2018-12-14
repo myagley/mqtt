@@ -35,9 +35,8 @@ fn main() {
 					retain: false,
 					payload: b"hello, world".to_vec(),
 				})
-				.expect("couldn't publish")
 				.then(|result| {
-					let () = result.expect("couldn't complete publish");
+					let () = result.expect("couldn't publish");
 					Ok(topic_name)
 				})
 		})
