@@ -51,14 +51,6 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	/// * `keep_alive`
 	///
 	///     The keep-alive time advertised to the server. The client will ping the server at half this interval.
-	///
-	/// * `max_pending_publish_requests`
-	///
-	///     The maximum number of pending publish requests that can be in flight at the same time.
-	///
-	/// * `max_pending_subscription_updates`
-	///
-	///     The maximum number of pending subscription updates (subscriptions and unsubscriptions) that can be in flight at the same time.
 	pub fn new(
 		client_id: Option<String>,
 		username: Option<String>,
@@ -66,16 +58,14 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 		io_source: IoS,
 		max_reconnect_back_off: std::time::Duration,
 		keep_alive: std::time::Duration,
-		max_pending_publish_requests: usize,
-		max_pending_subscription_updates: usize,
 	) -> Self {
 		let client_id = match client_id {
 			Some(id) => crate::proto::ClientId::IdWithCleanSession(id),
 			None => crate::proto::ClientId::ServerGenerated,
 		};
 
-		let (subscriptions_updated_send, subscriptions_updated_recv) = futures::sync::mpsc::channel(max_pending_subscription_updates);
-		let (publish_request_send, publish_request_recv) = futures::sync::mpsc::channel(max_pending_publish_requests);
+		let (subscriptions_updated_send, subscriptions_updated_recv) = futures::sync::mpsc::channel(0);
+		let (publish_request_send, publish_request_recv) = futures::sync::mpsc::channel(0);
 
 		Client {
 			client_id,

@@ -55,8 +55,6 @@ fn main() {
 			move || tokio::net::TcpStream::connect(&server),
 			std::time::Duration::from_secs(max_reconnect_back_off),
 			std::time::Duration::from_secs(keep_alive),
-			10,
-			10,
 		);
 
 	let mut update_subscription_handle = client.update_subscription_handle();

@@ -64,8 +64,6 @@ fn main() {
 			move || tokio::net::TcpStream::connect(&server),
 			std::time::Duration::from_secs(max_reconnect_back_off),
 			std::time::Duration::from_secs(keep_alive),
-			10,
-			10,
 		);
 
 	let mut publish_handle = client.publish_handle();
