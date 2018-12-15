@@ -14,7 +14,7 @@
 )]
 
 mod client;
-pub use self::client::{ Client, Error, IoSource, Publication, PublishHandle, UpdateSubscriptionHandle };
+pub use self::client::{ Client, Error, IoSource, Publication, PublishHandle, ReceivedPublication, UpdateSubscriptionHandle };
 
 mod logging_framed;
 

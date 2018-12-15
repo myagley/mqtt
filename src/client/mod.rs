@@ -102,7 +102,7 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 }
 
 impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future as Future>::Error: std::fmt::Display {
-	type Item = Vec<crate::Publication>;
+	type Item = Vec<crate::ReceivedPublication>;
 	type Error = Error;
 
 	fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
@@ -125,7 +125,7 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 
 				self.ping.new_connection();
 
-				self.packets_waiting_to_be_sent.extend(self.publish.new_connection());
+				self.packets_waiting_to_be_sent.extend(self.publish.new_connection(reset_session));
 
 				self.packets_waiting_to_be_sent.extend(self.subscriptions.new_connection(reset_session));
 			}
@@ -290,6 +290,15 @@ pub struct Publication {
 	pub payload: Vec<u8>,
 }
 
+/// A message that was received from the server
+#[derive(Debug)]
+pub struct ReceivedPublication {
+	pub topic_name: String,
+	pub dup: bool,
+	pub qos: crate::proto::QoS,
+	pub payload: Vec<u8>,
+}
+
 fn client_poll<S>(
 	framed: &mut crate::logging_framed::LoggingFramed<S>,
 	keep_alive: std::time::Duration,
@@ -299,7 +308,7 @@ fn client_poll<S>(
 	ping: &mut self::ping::State,
 	publish: &mut self::publish::State,
 	subscriptions: &mut self::subscriptions::State,
-) -> futures::Poll<Vec<crate::Publication>, Error>
+) -> futures::Poll<Vec<crate::ReceivedPublication>, Error>
 where
 	S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
 {
@@ -362,13 +371,15 @@ where
 			}
 		}
 
-		let (new_publish_packets, new_publications_received) = publish.poll(
+		let (new_publish_packets, new_publication_received) = publish.poll(
 			&mut packet,
 			publish_requests_waiting_to_be_sent,
 		);
 
-		publications_received.extend(new_publications_received);
 		new_packets_to_be_sent.extend(new_publish_packets);
+		if let Some(new_publication_received) = new_publication_received {
+			publications_received.push(new_publication_received);
+		}
 
 		// -------------
 		// Subscriptions

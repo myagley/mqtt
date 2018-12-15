@@ -475,7 +475,7 @@ impl tokio::codec::Encoder for PacketCodec {
 			},
 
 			Packet::PubRel { packet_identifier } => {
-				dst.append_u8(Packet::PUBREL);
+				dst.append_u8(Packet::PUBREL | 0x02);
 				super::RemainingLengthCodec::default().encode(std::mem::size_of::<u16>(), dst)?;
 				dst.append_packet_identifier(packet_identifier);
 			},
