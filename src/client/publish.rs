@@ -133,6 +133,18 @@ impl State {
 	}
 
 	pub (super) fn new_connection<'a>(&'a mut self) -> impl Iterator<Item = crate::proto::Packet> + 'a {
+		// Do not reset self.previously_seen_publish_packets here, *even if* the session has been reset by the server.
+		//
+		// If the server does send a new PUBLISH packet with a packet identifier that was previously marked as seen,
+		// the packet would not be marked as a duplicate since the server should have cleared its session,
+		// so it doesn't matter if the set was cleared or not.
+		//
+		// If the server *does* send a duplicate PUBLISH packet with an already-seen identifier, say because
+		// it hasn't reset its session state despite claiming to do so, then we'll be *right* to ack it without
+		// forwarding it to the client.
+		//
+		// So it's correct to not clear the set.
+
 		self.at_least_once_waiting_to_be_acked.values()
 		.map(|(_, packet)| packet.clone())
 	}
