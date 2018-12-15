@@ -1,6 +1,6 @@
 // Example:
 //
-//     cargo run --example subscriber -- --server 127.0.0.1:1883 --client-id 'example-subscriber' --topic-filter foo --qos 'AtLeastOnce'
+//     cargo run --example subscriber -- --server 127.0.0.1:1883 --client-id 'example-subscriber' --topic-filter foo --qos 1
 
 use futures::{ Future, Stream };
 

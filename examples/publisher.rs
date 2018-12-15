@@ -1,6 +1,6 @@
 // Example:
 //
-//     cargo run --example publisher -- --server 127.0.0.1:1883 --client-id 'example-publisher' --topic foo --payload 'hello, world' --publish-frequency 1000
+//     cargo run --example publisher -- --server 127.0.0.1:1883 --client-id 'example-publisher' --publish-frequency 1000 --topic foo --qos 1 --payload 'hello, world'
 
 use futures::{ Future, Stream };
 
