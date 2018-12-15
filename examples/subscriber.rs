@@ -4,6 +4,8 @@
 
 use futures::{ Future, Stream };
 
+mod common;
+
 #[derive(Debug, structopt_derive::StructOpt)]
 struct Options {
 	#[structopt(help = "Address of the MQTT server.", long = "server")]
@@ -18,16 +20,26 @@ struct Options {
 	#[structopt(help = "Password used to authenticate with the server, if any.", long = "password")]
 	password: Option<String>,
 
-	#[structopt(help = "Maximum back-off time between reconnections to the server, in seconds.", long = "max-reconnect-back-off", default_value = "30")]
-	max_reconnect_back_off: u64,
+	#[structopt(
+		help = "Maximum back-off time between reconnections to the server, in seconds.",
+		long = "max-reconnect-back-off",
+		default_value = "30",
+		parse(try_from_str = "common::duration_from_secs_str"),
+	)]
+	max_reconnect_back_off: std::time::Duration,
 
-	#[structopt(help = "Keep-alive time advertised to the server, in seconds.", long = "keep-alive", default_value = "5")]
-	keep_alive: u64,
+	#[structopt(
+		help = "Keep-alive time advertised to the server, in seconds.",
+		long = "keep-alive",
+		default_value = "5",
+		parse(try_from_str = "common::duration_from_secs_str"),
+	)]
+	keep_alive: std::time::Duration,
 
 	#[structopt(help = "The topic filter to subscribe to.", long = "topic-filter")]
 	topic_filter: String,
 
-	#[structopt(help = "The QoS with which to subscribe to the topic.", long = "qos", parse(from_str = "qos_from_str"))]
+	#[structopt(help = "The QoS with which to subscribe to the topic.", long = "qos", parse(try_from_str = "common::qos_from_str"))]
 	qos: mqtt::proto::QoS,
 }
 
@@ -53,8 +65,8 @@ fn main() {
 			username,
 			password,
 			move || tokio::net::TcpStream::connect(&server),
-			std::time::Duration::from_secs(max_reconnect_back_off),
-			std::time::Duration::from_secs(keep_alive),
+			max_reconnect_back_off,
+			keep_alive,
 		);
 
 	let mut update_subscription_handle = client.update_subscription_handle();
@@ -89,13 +101,4 @@ fn main() {
 	});
 
 	runtime.block_on(f).expect("subscriber failed");
-}
-
-fn qos_from_str(s: &str) -> mqtt::proto::QoS {
-	match s {
-		"0" | "AtMostOnce" => mqtt::proto::QoS::AtMostOnce,
-		"1" | "AtLeastOnce" => mqtt::proto::QoS::AtLeastOnce,
-		"2" | "ExactlyOnce" => mqtt::proto::QoS::ExactlyOnce,
-		s => panic!("unrecognized QoS {:?}: must be one of 0, 1, 2, AtMostOnce, AtLeastOnce, ExactlyOnce", s),
-	}
 }
