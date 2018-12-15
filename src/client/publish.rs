@@ -161,7 +161,7 @@ impl Default for State {
 	}
 }
 
-struct PreviouslySeenPackets([u8; PreviouslySeenPackets::SIZE]);
+struct PreviouslySeenPackets(Box<[u8; PreviouslySeenPackets::SIZE]>);
 
 impl PreviouslySeenPackets {
 	/// Size of a bitset for every packet identifier
@@ -191,6 +191,6 @@ impl std::fmt::Debug for PreviouslySeenPackets {
 
 impl Default for PreviouslySeenPackets {
 	fn default() -> Self {
-		PreviouslySeenPackets([0; PreviouslySeenPackets::SIZE])
+		PreviouslySeenPackets(Box::new([0; PreviouslySeenPackets::SIZE]))
 	}
 }
