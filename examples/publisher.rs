@@ -84,7 +84,7 @@ fn main() {
 		);
 
 	let mut publish_handle = client.publish_handle();
-	let publish_loop =
+	executor.clone().spawn(
 		tokio::timer::Interval::new(std::time::Instant::now(), publish_frequency)
 		.then(move |result| {
 			let _ = result.expect("timer failed");
@@ -92,23 +92,22 @@ fn main() {
 			let topic = topic.clone();
 			log::info!("Publishing to {} ...", topic);
 
-			publish_handle
+			executor.spawn(publish_handle
 				.publish(mqtt::Publication {
 					topic_name: topic.clone(),
 					qos,
 					retain: false,
 					payload: payload.clone().into_bytes(),
 				})
-				.then(|result| {
+				.then(move |result| {
 					let () = result.expect("couldn't publish");
-					Ok(topic)
-				})
-		})
-		.for_each(|topic_name| {
-			log::info!("Published to {}", topic_name);
+					log::info!("Published to {}", topic);
+					Ok(())
+				}));
+
 			Ok(())
-		});
-	executor.spawn(publish_loop);
+		})
+		.for_each(Ok));
 
 	let f = client.for_each(|_| Ok(()));
 
