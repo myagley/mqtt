@@ -17,9 +17,9 @@ impl State {
 	pub(super) fn poll(
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
-		publish_requests_waiting_to_be_sent: Vec<super::PublishRequest>,
+		publish_requests_waiting_to_be_sent: &mut std::collections::VecDeque<super::PublishRequest>,
 		packet_identifiers: &mut super::PacketIdentifiers,
-	) -> (Vec<crate::proto::Packet>, Option<crate::ReceivedPublication>) {
+	) -> Result<(Vec<crate::proto::Packet>, Option<crate::ReceivedPublication>), super::Error> {
 		let mut packets_waiting_to_be_sent = vec![];
 		let mut publication_received = None;
 
@@ -122,7 +122,7 @@ impl State {
 			other => *packet = other,
 		}
 
-		for super::PublishRequest { publication, ack_sender } in publish_requests_waiting_to_be_sent {
+		while let Some(super::PublishRequest { publication, ack_sender }) = publish_requests_waiting_to_be_sent.pop_front() {
 			match publication.qos {
 				crate::proto::QoS::AtMostOnce => {
 					packets_waiting_to_be_sent.push(crate::proto::Packet::Publish {
@@ -139,7 +139,13 @@ impl State {
 				},
 
 				crate::proto::QoS::AtLeastOnce => {
-					let packet_identifier = packet_identifiers.reserve();
+					let packet_identifier = match packet_identifiers.reserve() {
+						Ok(packet_identifier) => packet_identifier,
+						Err(err) => {
+							publish_requests_waiting_to_be_sent.push_front(super::PublishRequest { publication, ack_sender });
+							return Err(err);
+						},
+					};
 
 					let packet = crate::proto::Packet::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, false),
@@ -159,7 +165,13 @@ impl State {
 				},
 
 				crate::proto::QoS::ExactlyOnce => {
-					let packet_identifier = packet_identifiers.reserve();
+					let packet_identifier = match packet_identifiers.reserve() {
+						Ok(packet_identifier) => packet_identifier,
+						Err(err) => {
+							publish_requests_waiting_to_be_sent.push_front(super::PublishRequest { publication, ack_sender });
+							return Err(err);
+						},
+					};
 
 					let packet = crate::proto::Packet::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
@@ -180,7 +192,7 @@ impl State {
 			}
 		}
 
-		(packets_waiting_to_be_sent, publication_received)
+		Ok((packets_waiting_to_be_sent, publication_received))
 	}
 
 	pub (super) fn new_connection<'a>(

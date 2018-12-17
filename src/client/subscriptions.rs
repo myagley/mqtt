@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 #[derive(Debug)]
 pub(super) struct State {
 	subscriptions: std::collections::HashMap<String, crate::proto::QoS>,
@@ -12,7 +10,7 @@ impl State {
 	pub(super) fn poll(
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
-		subscription_updates_waiting_to_be_sent: Vec<super::SubscriptionUpdate>,
+		subscription_updates_waiting_to_be_sent: &mut std::collections::VecDeque<super::SubscriptionUpdate>,
 		packet_identifiers: &mut super::PacketIdentifiers,
 	) -> Result<Vec<crate::proto::Packet>, super::Error> {
 		match packet.take() {
@@ -61,7 +59,7 @@ impl State {
 			other => *packet = other,
 		}
 
-		let mut packets_waiting_to_be_sent = vec![];
+
 		// subscription_updates_waiting_to_be_sent may contain Subscribe and Unsubscribe in arbitrary order, so we have to partition them into
 		// a group of Subscribe and a group of Unsubscribe.
 		//
@@ -71,47 +69,62 @@ impl State {
 		// So we cannot just make a group of all Subscribes, send that packet, then make a group of all Unsubscribes, then send that packet.
 		// Instead, we have to respect the ordering of Subscribes with Unsubscribes.
 		// So we make groups of *consecutive* Subscribes and *consecutive* Unsubscribes, and construct one packet for each such group.
-		for (_, subscription_updates) in &subscription_updates_waiting_to_be_sent.into_iter().group_by(std::mem::discriminant) {
-			let mut subscription_updates = subscription_updates.peekable();
 
-			let packet_identifier = packet_identifiers.reserve();
+		let mut packets_waiting_to_be_sent = vec![];
 
-			let mut subscriptions_waiting_to_be_acked = vec![];
-			let mut unsubscriptions_waiting_to_be_acked = vec![];
+		while let Some(subscription_update) = subscription_updates_waiting_to_be_sent.pop_front() {
+			let packet_identifier = match packet_identifiers.reserve() {
+				Ok(packet_identifier) => packet_identifier,
+				Err(err) => {
+					subscription_updates_waiting_to_be_sent.push_front(subscription_update);
+					return Err(err);
+				},
+			};
 
-			if let Some(super::SubscriptionUpdate::Subscribe(_)) = subscription_updates.peek() {
-				for subscription_update in subscription_updates {
-					if let super::SubscriptionUpdate::Subscribe(subscribe_to) = subscription_update {
-						subscriptions_waiting_to_be_acked.push(subscribe_to);
+			match subscription_update {
+				super::SubscriptionUpdate::Subscribe(subscribe_to) => {
+					let mut subscriptions_waiting_to_be_acked = vec![subscribe_to];
+
+					loop {
+						match subscription_updates_waiting_to_be_sent.pop_front() {
+							Some(super::SubscriptionUpdate::Subscribe(subscribe_to)) => subscriptions_waiting_to_be_acked.push(subscribe_to),
+							Some(unsubscribe @ super::SubscriptionUpdate::Unsubscribe(_)) => {
+								subscription_updates_waiting_to_be_sent.push_front(unsubscribe);
+								break;
+							},
+							None => break,
+						}
 					}
-					else {
-						unreachable!();
+
+					self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
+
+					packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe {
+						packet_identifier,
+						subscribe_to: subscriptions_waiting_to_be_acked,
+					});
+				},
+
+				super::SubscriptionUpdate::Unsubscribe(unsubscribe_from) => {
+					let mut unsubscriptions_waiting_to_be_acked = vec![unsubscribe_from];
+
+					loop {
+						match subscription_updates_waiting_to_be_sent.pop_front() {
+							Some(super::SubscriptionUpdate::Unsubscribe(unsubscribe_from)) => unsubscriptions_waiting_to_be_acked.push(unsubscribe_from),
+							Some(subscribe @ super::SubscriptionUpdate::Subscribe(_)) => {
+								subscription_updates_waiting_to_be_sent.push_front(subscribe);
+								break;
+							},
+							None => break,
+						}
 					}
-				}
 
-				self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
+					self.unsubscriptions_waiting_to_be_acked.insert(packet_identifier, unsubscriptions_waiting_to_be_acked.clone());
 
-				packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe {
-					packet_identifier,
-					subscribe_to: subscriptions_waiting_to_be_acked,
-				});
-			}
-			else {
-				for subscription_update in subscription_updates {
-					if let super::SubscriptionUpdate::Unsubscribe(unsubscribe_from) = subscription_update {
-						unsubscriptions_waiting_to_be_acked.push(unsubscribe_from);
-					}
-					else {
-						unreachable!();
-					}
-				}
-
-				self.unsubscriptions_waiting_to_be_acked.insert(packet_identifier, unsubscriptions_waiting_to_be_acked.clone());
-
-				packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe {
-					packet_identifier,
-					unsubscribe_from: unsubscriptions_waiting_to_be_acked,
-				});
+					packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe {
+						packet_identifier,
+						unsubscribe_from: unsubscriptions_waiting_to_be_acked,
+					});
+				},
 			}
 		}
 
@@ -174,7 +187,7 @@ impl State {
 				NewConnectionIter::Empty
 			}
 			else {
-				let packet_identifier = packet_identifiers.reserve();
+				let packet_identifier = packet_identifiers.reserve().expect("reset session should have available packet identifiers");
 				self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
 
 				NewConnectionIter::Single(std::iter::once(crate::proto::Packet::Subscribe {

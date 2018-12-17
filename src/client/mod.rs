@@ -15,9 +15,11 @@ pub struct Client<IoS> where IoS: IoSource {
 
 	publish_request_send: futures::sync::mpsc::Sender<PublishRequest>,
 	publish_request_recv: futures::sync::mpsc::Receiver<PublishRequest>,
+	publish_requests_waiting_to_be_sent: std::collections::VecDeque<PublishRequest>,
 
 	subscriptions_updated_send: futures::sync::mpsc::Sender<SubscriptionUpdate>,
 	subscriptions_updated_recv: futures::sync::mpsc::Receiver<SubscriptionUpdate>,
+	subscription_updates_waiting_to_be_sent: std::collections::VecDeque<SubscriptionUpdate>,
 
 	packet_identifiers: PacketIdentifiers,
 
@@ -77,9 +79,11 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 
 			publish_request_send,
 			publish_request_recv,
+			publish_requests_waiting_to_be_sent: Default::default(),
 
 			subscriptions_updated_send,
 			subscriptions_updated_recv,
+			subscription_updates_waiting_to_be_sent: Default::default(),
 
 			packet_identifiers: Default::default(),
 
@@ -138,7 +142,9 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				framed,
 				self.keep_alive,
 				&mut self.publish_request_recv,
+				&mut self.publish_requests_waiting_to_be_sent,
 				&mut self.subscriptions_updated_recv,
+				&mut self.subscription_updates_waiting_to_be_sent,
 				&mut self.packets_waiting_to_be_sent,
 				&mut self.packet_identifiers,
 				&mut self.ping,
@@ -147,20 +153,22 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 			) {
 				Ok(futures::Async::Ready(result)) => break Ok(futures::Async::Ready(Some(result))),
 				Ok(futures::Async::NotReady) => break Ok(futures::Async::NotReady),
-				Err(err) => {
-					let err = match err {
-						Error::EncodePacket(err) =>
-							if err.is_user_error() {
-								break Err(Error::EncodePacket(err));
-							}
-							else {
-								Error::EncodePacket(err)
-							},
-						err => err,
-					};
-					log::warn!("client will reconnect because of error: {}", err);
-					self.connect.reconnect();
-				},
+				Err(err) =>
+					if err.is_user_error() {
+						break Err(err);
+					}
+					else {
+						log::warn!("client will reconnect because of error: {}", err);
+
+						// Ensure clean session
+						self.client_id = match std::mem::replace(&mut self.client_id, crate::proto::ClientId::ServerGenerated) {
+							id @ crate::proto::ClientId::ServerGenerated |
+							id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
+							crate::proto::ClientId::IdWithExistingSession(id) => crate::proto::ClientId::IdWithCleanSession(id),
+						};
+
+						self.connect.reconnect();
+					},
 			}
 		}
 	}
@@ -308,7 +316,9 @@ fn client_poll<S>(
 	framed: &mut crate::logging_framed::LoggingFramed<S>,
 	keep_alive: std::time::Duration,
 	publish_request_recv: &mut futures::sync::mpsc::Receiver<PublishRequest>,
+	publish_requests_waiting_to_be_sent: &mut std::collections::VecDeque<PublishRequest>,
 	subscriptions_updated_recv: &mut futures::sync::mpsc::Receiver<SubscriptionUpdate>,
+	subscription_updates_waiting_to_be_sent: &mut std::collections::VecDeque<SubscriptionUpdate>,
 	packets_waiting_to_be_sent: &mut std::collections::VecDeque<crate::proto::Packet>,
 	packet_identifiers: &mut PacketIdentifiers,
 	ping: &mut self::ping::State,
@@ -365,11 +375,10 @@ where
 		// Publish
 		// -------
 
-		let mut publish_requests_waiting_to_be_sent = vec![];
 		loop {
 			match publish_request_recv.poll().expect("Receiver::poll cannot fail") {
 				futures::Async::Ready(Some(publish_request)) =>
-					publish_requests_waiting_to_be_sent.push(publish_request),
+					publish_requests_waiting_to_be_sent.push_back(publish_request),
 
 				futures::Async::Ready(None) |
 				futures::Async::NotReady =>
@@ -381,7 +390,7 @@ where
 			&mut packet,
 			publish_requests_waiting_to_be_sent,
 			packet_identifiers,
-		);
+		)?;
 
 		new_packets_to_be_sent.extend(new_publish_packets);
 		if let Some(new_publication_received) = new_publication_received {
@@ -392,11 +401,10 @@ where
 		// Subscriptions
 		// -------------
 
-		let mut subscription_updates_waiting_to_be_sent = vec![];
 		loop {
 			match subscriptions_updated_recv.poll().expect("Receiver::poll cannot fail") {
 				futures::Async::Ready(Some(subscription_to_update)) =>
-					subscription_updates_waiting_to_be_sent.push(subscription_to_update),
+					subscription_updates_waiting_to_be_sent.push_back(subscription_to_update),
 
 				futures::Async::Ready(None) |
 				futures::Async::NotReady =>
@@ -445,7 +453,7 @@ impl PacketIdentifiers {
 	/// = pow(2, 16) / 64
 	const SIZE: usize = 1024;
 
-	fn reserve(&mut self) -> crate::proto::PacketIdentifier {
+	fn reserve(&mut self) -> Result<crate::proto::PacketIdentifier, Error> {
 		let start = self.previous;
 		let mut current = start;
 
@@ -456,11 +464,11 @@ impl PacketIdentifiers {
 			if (*block & mask) == 0 {
 				*block |= mask;
 				self.previous = current;
-				return current;
+				return Ok(current);
 			}
 
 			if current == start {
-				panic!("All packet identifiers exhausted!");
+				return Err(Error::PacketIdentifiersExhausted);
 			}
 		}
 	}
@@ -494,10 +502,11 @@ impl Default for PacketIdentifiers {
 
 #[derive(Debug)]
 pub enum Error {
-	ServerClosedConnection,
 	DecodePacket(crate::proto::DecodeError),
 	EncodePacket(crate::proto::EncodeError),
+	PacketIdentifiersExhausted,
 	PingTimer(tokio::timer::Error),
+	ServerClosedConnection,
 	SubAckDoesNotContainEnoughQoS(crate::proto::PacketIdentifier, usize, usize),
 	SubscriptionDowngraded(String, crate::proto::QoS, crate::proto::QoS),
 	SubscriptionFailed,
@@ -505,20 +514,32 @@ pub enum Error {
 	UnrecognizedUnsubAck(crate::proto::PacketIdentifier),
 }
 
+impl Error {
+	fn is_user_error(&self) -> bool {
+		match self {
+			Error::EncodePacket(err) => err.is_user_error(),
+			_ => false,
+		}
+	}
+}
+
 impl std::fmt::Display for Error {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
-			Error::ServerClosedConnection =>
-				write!(f, "connection closed by server"),
-
 			Error::DecodePacket(err) =>
 				write!(f, "could not decode packet: {}", err),
 
 			Error::EncodePacket(err) =>
 				write!(f, "could not encode packet: {}", err),
 
+			Error::PacketIdentifiersExhausted =>
+				write!(f, "all packet identifiers exhausted"),
+
 			Error::PingTimer(err) =>
 				write!(f, "ping timer failed: {}", err),
+
+			Error::ServerClosedConnection =>
+				write!(f, "connection closed by server"),
 
 			Error::SubAckDoesNotContainEnoughQoS(packet_identifier, expected, actual) =>
 				write!(f, "Expected SUBACK {} to contain {} QoS's but it actually contained {}", packet_identifier, expected, actual),
@@ -542,10 +563,11 @@ impl std::error::Error for Error {
 	fn source(&self) -> Option<&(std::error::Error + 'static)> {
 		#[allow(clippy::match_same_arms)]
 		match self {
-			Error::ServerClosedConnection => None,
 			Error::DecodePacket(err) => Some(err),
 			Error::EncodePacket(err) => Some(err),
+			Error::PacketIdentifiersExhausted => None,
 			Error::PingTimer(err) => Some(err),
+			Error::ServerClosedConnection => None,
 			Error::SubAckDoesNotContainEnoughQoS(_, _, _) => None,
 			Error::SubscriptionDowngraded(_, _, _) => None,
 			Error::SubscriptionFailed => None,
