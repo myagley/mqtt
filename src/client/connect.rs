@@ -13,15 +13,15 @@ enum State<IoS> where IoS: super::IoSource {
 	EndBackOff(tokio::timer::Delay),
 	BeginConnecting,
 	WaitingForIoToConnect(<IoS as super::IoSource>::Future),
-	BeginSendingConnect(crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>),
-	EndSendingConnect(crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>),
-	WaitingForConnAck(crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>),
-	Connected {
-		framed: crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>,
-		new_connection: bool,
-		reset_session: bool,
-	},
-	Invalid,
+	Framed(crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>, FramedState),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FramedState {
+	BeginSendingConnect,
+	EndSendingConnect,
+	WaitingForConnAck,
+	Connected { new_connection: bool, reset_session: bool },
 }
 
 impl<IoS> std::fmt::Debug for State<IoS> where IoS: super::IoSource {
@@ -35,15 +35,7 @@ impl<IoS> std::fmt::Debug for State<IoS> where IoS: super::IoSource {
 			State::EndBackOff(_) => f.write_str("EndBackOff"),
 			State::BeginConnecting => f.write_str("BeginConnecting"),
 			State::WaitingForIoToConnect(_) => f.write_str("WaitingForIoToConnect"),
-			State::BeginSendingConnect(_) => f.write_str("BeginSendingConnect"),
-			State::EndSendingConnect(_) => f.write_str("EndSendingConnect"),
-			State::WaitingForConnAck(_) => f.write_str("WaitingForConnAck"),
-			State::Connected { framed: _, new_connection, reset_session } =>
-				f.debug_struct("Connected")
-				.field("new_connection", new_connection)
-				.field("reset_session", reset_session)
-				.finish(),
-			State::Invalid => f.write_str("Invalid"),
+			State::Framed(_, framed_state) => f.debug_tuple("Framed").field(framed_state).finish(),
 		}
 	}
 }
@@ -71,51 +63,51 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 		client_id: &mut crate::proto::ClientId,
 		keep_alive: std::time::Duration,
 	) -> futures::Poll<Connected<'a, IoS>, ()> {
-		let mut current_state = std::mem::replace(&mut self.state, State::Invalid);
-
-		log::trace!("    {:?}", current_state);
+		let state = &mut self.state;
 
 		loop {
-			let (next_state, result) = match current_state {
+			log::trace!("    {:?}", state);
+
+			match state {
 				State::BeginBackOff => match self.current_back_off {
 					back_off if back_off.as_secs() == 0 => {
 						self.current_back_off = std::time::Duration::from_secs(1);
-						(State::BeginConnecting, None)
+						*state = State::BeginConnecting;
 					},
 
 					back_off => {
 						log::debug!("Backing off for {:?}", back_off);
 						let back_off_deadline = std::time::Instant::now() + back_off;
 						self.current_back_off = std::cmp::min(self.max_back_off, self.current_back_off * 2);
-						(State::EndBackOff(tokio::timer::Delay::new(back_off_deadline)), None)
+						*state = State::EndBackOff(tokio::timer::Delay::new(back_off_deadline));
 					},
 				},
 
-				State::EndBackOff(mut back_off_timer) => match back_off_timer.poll().expect("TODO: handle Delay error") {
-					futures::Async::Ready(()) => (State::BeginConnecting, None),
-					futures::Async::NotReady => (State::EndBackOff(back_off_timer), Some(futures::Async::NotReady)),
+				State::EndBackOff(back_off_timer) => match back_off_timer.poll().expect("TODO: handle Delay error") {
+					futures::Async::Ready(()) => *state = State::BeginConnecting,
+					futures::Async::NotReady => return Ok(futures::Async::NotReady),
 				},
 
 				State::BeginConnecting => {
 					let io = self.io_source.connect();
-					(State::WaitingForIoToConnect(io), None)
+					*state = State::WaitingForIoToConnect(io);
 				},
 
-				State::WaitingForIoToConnect(mut io) => match io.poll() {
+				State::WaitingForIoToConnect(io) => match io.poll() {
 					Ok(futures::Async::Ready(io)) => {
 						let framed = crate::logging_framed::LoggingFramed::new(io);
-						(State::BeginSendingConnect(framed), None)
+						*state = State::Framed(framed, FramedState::BeginSendingConnect);
 					},
 
-					Ok(futures::Async::NotReady) => (State::WaitingForIoToConnect(io), Some(futures::Async::NotReady)),
+					Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
 
 					Err(err) => {
 						log::warn!("could not connect to server: {}", err);
-						(State::BeginBackOff, None)
+						*state = State::BeginBackOff;
 					},
 				},
 
-				State::BeginSendingConnect(mut framed) => {
+				State::Framed(framed, framed_state @ FramedState::BeginSendingConnect) => {
 					let packet = crate::proto::Packet::Connect {
 						username: username.map(ToOwned::to_owned),
 						password: password.map(ToOwned::to_owned),
@@ -124,25 +116,25 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					};
 
 					match framed.start_send(packet) {
-						Ok(futures::AsyncSink::Ready) => (State::EndSendingConnect(framed), None),
-						Ok(futures::AsyncSink::NotReady(_)) => (State::BeginSendingConnect(framed), Some(futures::Async::NotReady)),
+						Ok(futures::AsyncSink::Ready) => *framed_state = FramedState::EndSendingConnect,
+						Ok(futures::AsyncSink::NotReady(_)) => return Ok(futures::Async::NotReady),
 						Err(err) => {
 							log::warn!("could not connect to server: {}", err);
-							(State::BeginBackOff, None)
+							*state = State::BeginBackOff;
 						},
 					}
 				},
 
-				State::EndSendingConnect(mut framed) => match framed.poll_complete() {
-					Ok(futures::Async::Ready(())) => (State::WaitingForConnAck(framed), None),
-					Ok(futures::Async::NotReady) => (State::EndSendingConnect(framed), Some(futures::Async::NotReady)),
+				State::Framed(framed, framed_state @ FramedState::EndSendingConnect) => match framed.poll_complete() {
+					Ok(futures::Async::Ready(())) => *framed_state = FramedState::WaitingForConnAck,
+					Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
 					Err(err) => {
 						log::warn!("could not connect to server: {}", err);
-						(State::BeginBackOff, None)
+						*state = State::BeginBackOff;
 					},
 				},
 
-				State::WaitingForConnAck(mut framed) => match framed.poll() {
+				State::Framed(framed, framed_state @ FramedState::WaitingForConnAck) => match framed.poll() {
 					Ok(futures::Async::Ready(Some(packet))) => match packet {
 						crate::proto::Packet::ConnAck { session_present, return_code: crate::proto::ConnectReturnCode::Accepted } => {
 							self.current_back_off = std::time::Duration::from_secs(0);
@@ -159,63 +151,43 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 								},
 							};
 
-							(State::Connected { framed, new_connection: true, reset_session }, None)
+							*framed_state = FramedState::Connected { new_connection: true, reset_session };
 						},
 
 						crate::proto::Packet::ConnAck { return_code: crate::proto::ConnectReturnCode::Refused(return_code), .. } => {
 							log::warn!("could not connect to server: connection refused: {:?}", return_code);
-							(State::BeginBackOff, None)
+							*state = State::BeginBackOff;
 						},
 
 						packet => {
 							log::warn!("could not connect to server: expected to receive ConnAck but received {:?}", packet);
-							(State::BeginBackOff, None)
+							*state = State::BeginBackOff;
 						},
 					},
 
 					Ok(futures::Async::Ready(None)) => {
 						log::warn!("could not connect to server: connection closed by server");
-						(State::BeginBackOff, None)
+						*state = State::BeginBackOff;
 					},
 
-					Ok(futures::Async::NotReady) => (State::WaitingForConnAck(framed), Some(futures::Async::NotReady)),
+					Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
 
 					Err(err) => {
 						log::warn!("could not connect to server: {}", err);
-						(State::BeginBackOff, None)
+						*state = State::BeginBackOff;
 					},
 				},
 
-				State::Connected { framed, new_connection, reset_session } =>
-					(State::Connected { framed, new_connection: false, reset_session: false }, Some(futures::Async::Ready((new_connection, reset_session)))),
-
-				State::Invalid => unreachable!(),
-			};
-			current_state = next_state;
-
-			log::trace!("--> {:?}", current_state);
-
-			match result {
-				Some(futures::Async::Ready((new_connection, reset_session))) => {
-					self.state = current_state;
-
-					match &mut self.state {
-						State::Connected { framed, .. } => break Ok(futures::Async::Ready(Connected {
-							framed,
-							new_connection,
-							reset_session,
-						})),
-						_ => unreachable!(),
-					}
+				State::Framed(framed, FramedState::Connected { new_connection, reset_session }) => {
+					let result = Connected {
+						framed,
+						new_connection: *new_connection,
+						reset_session: *reset_session,
+					};
+					*new_connection = false;
+					*reset_session = false;
+					return Ok(futures::Async::Ready(result));
 				},
-
-				Some(futures::Async::NotReady) => {
-					self.state = current_state;
-
-					break Ok(futures::Async::NotReady);
-				},
-
-				None => (),
 			}
 		}
 	}
