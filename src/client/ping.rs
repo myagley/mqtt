@@ -12,7 +12,10 @@ impl State {
 		keep_alive: std::time::Duration,
 	) -> futures::Poll<crate::proto::Packet, super::Error> {
 		match packet.take() {
-			Some(crate::proto::Packet::PingResp) => *self = State::BeginWaitingForNextPing, // Reset ping timer
+			Some(crate::proto::Packet::PingResp) => match self {
+				State::BeginWaitingForNextPing => (),
+				State::WaitingForNextPing(ping_timer) => ping_timer.reset(deadline(std::time::Instant::now(), keep_alive)),
+			},
 			other => *packet = other,
 		}
 
@@ -21,16 +24,14 @@ impl State {
 
 			match self {
 				State::BeginWaitingForNextPing => {
-					let ping_timer_deadline = std::time::Instant::now() + keep_alive / 2;
-					let ping_timer = tokio::timer::Delay::new(ping_timer_deadline);
+					let ping_timer = tokio::timer::Delay::new(deadline(std::time::Instant::now(), keep_alive));
 					*self = State::WaitingForNextPing(ping_timer);
 				},
 
 				State::WaitingForNextPing(ping_timer) => match ping_timer.poll().map_err(super::Error::PingTimer)? {
 					futures::Async::Ready(()) => {
-						let packet = crate::proto::Packet::PingReq;
-						*self = State::BeginWaitingForNextPing;
-						return Ok(futures::Async::Ready(packet));
+						ping_timer.reset(deadline(ping_timer.deadline(), keep_alive));
+						return Ok(futures::Async::Ready(crate::proto::Packet::PingReq));
 					},
 
 					futures::Async::NotReady =>
@@ -52,4 +53,8 @@ impl std::fmt::Debug for State {
 			State::WaitingForNextPing { .. } => f.write_str("WaitingForNextPing"),
 		}
 	}
+}
+
+fn deadline(now: std::time::Instant, keep_alive: std::time::Duration) -> std::time::Instant {
+	now + keep_alive / 2
 }
