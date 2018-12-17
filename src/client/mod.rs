@@ -439,10 +439,16 @@ struct PacketIdentifiers {
 
 impl PacketIdentifiers {
 	fn reserve(&mut self) -> crate::proto::PacketIdentifier {
+		let start = self.previous;
+
 		loop {
 			self.previous += 1;
 			if !self.in_use.contains(&self.previous) {
 				break;
+			}
+
+			if self.previous == start {
+				panic!("All packet identifiers exhausted!");
 			}
 		}
 
