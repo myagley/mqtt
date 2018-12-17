@@ -264,9 +264,9 @@ impl std::ops::Add<u16> for PacketIdentifier {
 	type Output = Self;
 
 	fn add(self, other: u16) -> Self::Output {
-		PacketIdentifier(match std::num::Wrapping(self.0) + std::num::Wrapping(other) {
-			std::num::Wrapping(0) => 1,
-			std::num::Wrapping(value) => value,
+		PacketIdentifier(match self.0.wrapping_add(other) {
+			0 => 1,
+			value => value,
 		})
 	}
 }
