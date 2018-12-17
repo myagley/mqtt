@@ -1,7 +1,5 @@
 #[derive(Debug)]
 pub(super) struct State {
-	packet_identifiers: super::PacketIdentifiers,
-
 	/// Holds PUBLISH packets sent by us, waiting for a corresponding PUBACK or PUBREC
 	waiting_to_be_acked:
 		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Packet)>,
@@ -20,6 +18,7 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		publish_requests_waiting_to_be_sent: Vec<super::PublishRequest>,
+		packet_identifiers: &mut super::PacketIdentifiers,
 	) -> (Vec<crate::proto::Packet>, Option<crate::ReceivedPublication>) {
 		let mut packets_waiting_to_be_sent = vec![];
 		let mut publication_received = None;
@@ -27,7 +26,7 @@ impl State {
 		match packet.take() {
 			Some(crate::proto::Packet::PubAck { packet_identifier }) => match self.waiting_to_be_acked.remove(&packet_identifier) {
 				Some((ack_sender, _)) => {
-					self.packet_identifiers.discard(packet_identifier);
+					packet_identifiers.discard(packet_identifier);
 
 					match ack_sender.send(()) {
 						Ok(()) => (),
@@ -39,7 +38,7 @@ impl State {
 
 			Some(crate::proto::Packet::PubComp { packet_identifier }) => match self.waiting_to_be_completed.remove(&packet_identifier) {
 				Some((ack_sender, _)) => {
-					self.packet_identifiers.discard(packet_identifier);
+					packet_identifiers.discard(packet_identifier);
 
 					match ack_sender.send(()) {
 						Ok(()) => (),
@@ -109,7 +108,7 @@ impl State {
 
 			Some(crate::proto::Packet::PubRel { packet_identifier }) => {
 				if self.waiting_to_be_released.remove(&packet_identifier) {
-					self.packet_identifiers.discard(packet_identifier);
+					packet_identifiers.discard(packet_identifier);
 				}
 				else {
 					log::warn!("ignoring PUBREL for a PUBREC we never sent");
@@ -140,7 +139,7 @@ impl State {
 				},
 
 				crate::proto::QoS::AtLeastOnce => {
-					let packet_identifier = self.packet_identifiers.reserve();
+					let packet_identifier = packet_identifiers.reserve();
 
 					let packet = crate::proto::Packet::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, false),
@@ -160,7 +159,7 @@ impl State {
 				},
 
 				crate::proto::QoS::ExactlyOnce => {
-					let packet_identifier = self.packet_identifiers.reserve();
+					let packet_identifier = packet_identifiers.reserve();
 
 					let packet = crate::proto::Packet::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
@@ -184,14 +183,18 @@ impl State {
 		(packets_waiting_to_be_sent, publication_received)
 	}
 
-	pub (super) fn new_connection<'a>(&'a mut self, reset_session: bool) -> impl Iterator<Item = crate::proto::Packet> + 'a {
+	pub (super) fn new_connection<'a>(
+		&'a mut self,
+		reset_session: bool,
+		packet_identifiers: &mut super::PacketIdentifiers,
+	) -> impl Iterator<Item = crate::proto::Packet> + 'a {
 		if reset_session {
 			// Move all waiting_to_be_completed back to waiting_to_be_acked since we must restart the ExactlyOnce protocol flow
 			self.waiting_to_be_acked.append(&mut self.waiting_to_be_completed);
 
 			// Clear waiting_to_be_released
 			for packet_identifier in std::mem::replace(&mut self.waiting_to_be_released, Default::default()) {
-				self.packet_identifiers.discard(packet_identifier);
+				packet_identifiers.discard(packet_identifier);
 			}
 		}
 
@@ -206,8 +209,6 @@ impl State {
 impl Default for State {
 	fn default() -> Self {
 		State {
-			packet_identifiers: Default::default(),
-
 			waiting_to_be_acked: Default::default(),
 			waiting_to_be_released: Default::default(),
 			waiting_to_be_completed: Default::default(),

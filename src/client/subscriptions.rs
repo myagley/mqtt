@@ -2,8 +2,6 @@ use itertools::Itertools;
 
 #[derive(Debug)]
 pub(super) struct State {
-	packet_identifiers: super::PacketIdentifiers,
-
 	subscriptions: std::collections::HashMap<String, crate::proto::QoS>,
 
 	subscriptions_waiting_to_be_acked: std::collections::BTreeMap<crate::proto::PacketIdentifier, Vec<crate::proto::SubscribeTo>>,
@@ -15,6 +13,7 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		subscription_updates_waiting_to_be_sent: Vec<super::SubscriptionUpdate>,
+		packet_identifiers: &mut super::PacketIdentifiers,
 	) -> Result<Vec<crate::proto::Packet>, super::Error> {
 		match packet.take() {
 			Some(crate::proto::Packet::SubAck { packet_identifier, qos }) => {
@@ -22,7 +21,7 @@ impl State {
 					self.subscriptions_waiting_to_be_acked.remove(&packet_identifier)
 					.ok_or_else(|| super::Error::UnrecognizedSubAck(packet_identifier))?;
 
-				self.packet_identifiers.discard(packet_identifier);
+				packet_identifiers.discard(packet_identifier);
 
 				if subscriptions.len() != qos.len() {
 					return Err(super::Error::SubAckDoesNotContainEnoughQoS(packet_identifier, subscriptions.len(), qos.len()));
@@ -51,7 +50,7 @@ impl State {
 					self.unsubscriptions_waiting_to_be_acked.remove(&packet_identifier)
 					.ok_or_else(|| super::Error::UnrecognizedUnsubAck(packet_identifier))?;
 
-				self.packet_identifiers.discard(packet_identifier);
+				packet_identifiers.discard(packet_identifier);
 
 				for unsubscribe_from in unsubscriptions {
 					log::debug!("Unsubscribed from {}", unsubscribe_from);
@@ -75,7 +74,7 @@ impl State {
 		for (_, subscription_updates) in &subscription_updates_waiting_to_be_sent.into_iter().group_by(std::mem::discriminant) {
 			let mut subscription_updates = subscription_updates.peekable();
 
-			let packet_identifier = self.packet_identifiers.reserve();
+			let packet_identifier = packet_identifiers.reserve();
 
 			let mut subscriptions_waiting_to_be_acked = vec![];
 			let mut unsubscriptions_waiting_to_be_acked = vec![];
@@ -119,9 +118,18 @@ impl State {
 		Ok(packets_waiting_to_be_sent)
 	}
 
-	pub(super) fn new_connection(&mut self, reset_session: bool) -> impl Iterator<Item = crate::proto::Packet> {
+	pub(super) fn new_connection(
+		&mut self,
+		reset_session: bool,
+		packet_identifiers: &mut super::PacketIdentifiers,
+	) -> impl Iterator<Item = crate::proto::Packet> {
 		if reset_session {
-			self.packet_identifiers = Default::default();
+			for &packet_identifier in self.subscriptions_waiting_to_be_acked.keys() {
+				packet_identifiers.discard(packet_identifier);
+			}
+			for &packet_identifier in self.unsubscriptions_waiting_to_be_acked.keys() {
+				packet_identifiers.discard(packet_identifier);
+			}
 
 			let mut subscriptions = std::mem::replace(&mut self.subscriptions, Default::default());
 			let subscriptions_waiting_to_be_acked = std::mem::replace(&mut self.subscriptions_waiting_to_be_acked, Default::default());
@@ -166,7 +174,7 @@ impl State {
 				NewConnectionIter::Empty
 			}
 			else {
-				let packet_identifier = self.packet_identifiers.reserve();
+				let packet_identifier = packet_identifiers.reserve();
 				self.subscriptions_waiting_to_be_acked.insert(packet_identifier, subscriptions_waiting_to_be_acked.clone());
 
 				NewConnectionIter::Single(std::iter::once(crate::proto::Packet::Subscribe {
@@ -208,8 +216,6 @@ impl State {
 impl Default for State {
 	fn default() -> Self {
 		State {
-			packet_identifiers: Default::default(),
-
 			subscriptions: Default::default(),
 
 			subscriptions_waiting_to_be_acked: Default::default(),

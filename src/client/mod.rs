@@ -19,6 +19,8 @@ pub struct Client<IoS> where IoS: IoSource {
 	subscriptions_updated_send: futures::sync::mpsc::Sender<SubscriptionUpdate>,
 	subscriptions_updated_recv: futures::sync::mpsc::Receiver<SubscriptionUpdate>,
 
+	packet_identifiers: PacketIdentifiers,
+
 	connect: self::connect::Connect<IoS>,
 	ping: self::ping::State,
 	publish: self::publish::State,
@@ -73,11 +75,13 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 			password,
 			keep_alive,
 
+			publish_request_send,
+			publish_request_recv,
+
 			subscriptions_updated_send,
 			subscriptions_updated_recv,
 
-			publish_request_send,
-			publish_request_recv,
+			packet_identifiers: Default::default(),
 
 			connect: self::connect::Connect::new(io_source, max_reconnect_back_off),
 			ping: self::ping::State::BeginWaitingForNextPing,
@@ -125,9 +129,9 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 
 				self.ping.new_connection();
 
-				self.packets_waiting_to_be_sent.extend(self.publish.new_connection(reset_session));
+				self.packets_waiting_to_be_sent.extend(self.publish.new_connection(reset_session, &mut self.packet_identifiers));
 
-				self.packets_waiting_to_be_sent.extend(self.subscriptions.new_connection(reset_session));
+				self.packets_waiting_to_be_sent.extend(self.subscriptions.new_connection(reset_session, &mut self.packet_identifiers));
 			}
 
 			match client_poll(
@@ -136,6 +140,7 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				&mut self.publish_request_recv,
 				&mut self.subscriptions_updated_recv,
 				&mut self.packets_waiting_to_be_sent,
+				&mut self.packet_identifiers,
 				&mut self.ping,
 				&mut self.publish,
 				&mut self.subscriptions,
@@ -305,6 +310,7 @@ fn client_poll<S>(
 	publish_request_recv: &mut futures::sync::mpsc::Receiver<PublishRequest>,
 	subscriptions_updated_recv: &mut futures::sync::mpsc::Receiver<SubscriptionUpdate>,
 	packets_waiting_to_be_sent: &mut std::collections::VecDeque<crate::proto::Packet>,
+	packet_identifiers: &mut PacketIdentifiers,
 	ping: &mut self::ping::State,
 	publish: &mut self::publish::State,
 	subscriptions: &mut self::subscriptions::State,
@@ -374,6 +380,7 @@ where
 		let (new_publish_packets, new_publication_received) = publish.poll(
 			&mut packet,
 			publish_requests_waiting_to_be_sent,
+			packet_identifiers,
 		);
 
 		new_packets_to_be_sent.extend(new_publish_packets);
@@ -400,6 +407,7 @@ where
 		new_packets_to_be_sent.extend(subscriptions.poll(
 			&mut packet,
 			subscription_updates_waiting_to_be_sent,
+			packet_identifiers,
 		)?);
 
 		// ---
