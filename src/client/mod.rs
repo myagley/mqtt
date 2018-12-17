@@ -431,40 +431,62 @@ where
 	}
 }
 
-#[derive(Debug)]
 struct PacketIdentifiers {
-	in_use: std::collections::BTreeSet<crate::proto::PacketIdentifier>,
+	in_use: Box<[u64; PacketIdentifiers::SIZE]>,
 	previous: crate::proto::PacketIdentifier,
 }
 
 impl PacketIdentifiers {
+	/// Size of a bitset for every packet identifier
+	///
+	/// Packet identifiers are u16's, and there are 64 bits to a u64, so the number of u64's required
+	/// = number of u16's / 64
+	/// = pow(2, number of bits in a u16) / 64
+	/// = pow(2, 16) / 64
+	const SIZE: usize = 1024;
+
 	fn reserve(&mut self) -> crate::proto::PacketIdentifier {
 		let start = self.previous;
+		let mut current = start;
 
 		loop {
-			self.previous += 1;
-			if !self.in_use.contains(&self.previous) {
-				break;
+			current += 1;
+
+			let (block, mask) = self.entry(current);
+			if (*block & mask) == 0 {
+				*block |= mask;
+				self.previous = current;
+				return current;
 			}
 
-			if self.previous == start {
+			if current == start {
 				panic!("All packet identifiers exhausted!");
 			}
 		}
-
-		self.in_use.insert(self.previous);
-		self.previous
 	}
 
 	fn discard(&mut self, packet_identifier: crate::proto::PacketIdentifier) {
-		self.in_use.remove(&packet_identifier);
+		let (block, mask) = self.entry(packet_identifier);
+		*block &= !mask;
+	}
+
+	fn entry(&mut self, packet_identifier: crate::proto::PacketIdentifier) -> (&mut u64, u64) {
+		let packet_identifier = packet_identifier.get();
+		let (block, offset) = ((packet_identifier / 64) as usize, (packet_identifier % 64) as usize);
+		(&mut self.in_use[block], 1 << offset)
+	}
+}
+
+impl std::fmt::Debug for PacketIdentifiers {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		f.debug_struct("PacketIdentifiers").field("previous", &self.previous).finish()
 	}
 }
 
 impl Default for PacketIdentifiers {
 	fn default() -> Self {
 		PacketIdentifiers {
-			in_use: Default::default(),
+			in_use: Box::new([0; PacketIdentifiers::SIZE]),
 			previous: crate::proto::PacketIdentifier::max_value(),
 		}
 	}
