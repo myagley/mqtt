@@ -83,7 +83,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					},
 				},
 
-				State::EndBackOff(back_off_timer) => match back_off_timer.poll().expect("TODO: handle Delay error") {
+				State::EndBackOff(back_off_timer) => match back_off_timer.poll().expect("could not poll back-off timer") {
 					futures::Async::Ready(()) => *state = State::BeginConnecting,
 					futures::Async::NotReady => return Ok(futures::Async::NotReady),
 				},
