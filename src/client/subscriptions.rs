@@ -1,7 +1,13 @@
+use futures::{ Future, Sink, Stream };
+
 #[derive(Debug)]
 pub(super) struct State {
 	subscriptions: std::collections::HashMap<String, crate::proto::QoS>,
 
+	subscriptions_updated_send: futures::sync::mpsc::Sender<SubscriptionUpdate>,
+	subscriptions_updated_recv: futures::sync::mpsc::Receiver<SubscriptionUpdate>,
+
+	subscription_updates_waiting_to_be_sent: std::collections::VecDeque<SubscriptionUpdate>,
 	subscription_updates_waiting_to_be_acked: std::collections::VecDeque<(crate::proto::PacketIdentifier, BatchedSubscriptionUpdate)>,
 }
 
@@ -9,7 +15,6 @@ impl State {
 	pub(super) fn poll(
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
-		subscription_updates_waiting_to_be_sent: &mut std::collections::VecDeque<super::SubscriptionUpdate>,
 		packet_identifiers: &mut super::PacketIdentifiers,
 	) -> Result<Vec<crate::proto::Packet>, super::Error> {
 		match packet.take() {
@@ -122,6 +127,11 @@ impl State {
 		}
 
 
+		while let futures::Async::Ready(Some(subscription_to_update)) = self.subscriptions_updated_recv.poll().expect("Receiver::poll cannot fail") {
+			self.subscription_updates_waiting_to_be_sent.push_back(subscription_to_update);
+		}
+
+
 		// Rather than send individual SUBSCRIBE and UNSUBSCRIBE packets for each update, we can send multiple updates in the same packet.
 		// subscription_updates_waiting_to_be_sent may contain Subscribe and Unsubscribe in arbitrary order, so we have to partition them into
 		// a group of Subscribe and a group of Unsubscribe.
@@ -135,24 +145,24 @@ impl State {
 
 		let mut packets_waiting_to_be_sent = vec![];
 
-		while let Some(subscription_update) = subscription_updates_waiting_to_be_sent.pop_front() {
+		while let Some(subscription_update) = self.subscription_updates_waiting_to_be_sent.pop_front() {
 			let packet_identifier = match packet_identifiers.reserve() {
 				Ok(packet_identifier) => packet_identifier,
 				Err(err) => {
-					subscription_updates_waiting_to_be_sent.push_front(subscription_update);
+					self.subscription_updates_waiting_to_be_sent.push_front(subscription_update);
 					return Err(err);
 				},
 			};
 
 			match subscription_update {
-				super::SubscriptionUpdate::Subscribe(subscribe_to) => {
+				SubscriptionUpdate::Subscribe(subscribe_to) => {
 					let mut subscriptions_waiting_to_be_acked = vec![subscribe_to];
 
 					loop {
-						match subscription_updates_waiting_to_be_sent.pop_front() {
-							Some(super::SubscriptionUpdate::Subscribe(subscribe_to)) => subscriptions_waiting_to_be_acked.push(subscribe_to),
-							Some(unsubscribe @ super::SubscriptionUpdate::Unsubscribe(_)) => {
-								subscription_updates_waiting_to_be_sent.push_front(unsubscribe);
+						match self.subscription_updates_waiting_to_be_sent.pop_front() {
+							Some(SubscriptionUpdate::Subscribe(subscribe_to)) => subscriptions_waiting_to_be_acked.push(subscribe_to),
+							Some(unsubscribe @ SubscriptionUpdate::Unsubscribe(_)) => {
+								self.subscription_updates_waiting_to_be_sent.push_front(unsubscribe);
 								break;
 							},
 							None => break,
@@ -170,14 +180,14 @@ impl State {
 					});
 				},
 
-				super::SubscriptionUpdate::Unsubscribe(unsubscribe_from) => {
+				SubscriptionUpdate::Unsubscribe(unsubscribe_from) => {
 					let mut unsubscriptions_waiting_to_be_acked = vec![unsubscribe_from];
 
 					loop {
-						match subscription_updates_waiting_to_be_sent.pop_front() {
-							Some(super::SubscriptionUpdate::Unsubscribe(unsubscribe_from)) => unsubscriptions_waiting_to_be_acked.push(unsubscribe_from),
-							Some(subscribe @ super::SubscriptionUpdate::Subscribe(_)) => {
-								subscription_updates_waiting_to_be_sent.push_front(subscribe);
+						match self.subscription_updates_waiting_to_be_sent.pop_front() {
+							Some(SubscriptionUpdate::Unsubscribe(unsubscribe_from)) => unsubscriptions_waiting_to_be_acked.push(unsubscribe_from),
+							Some(subscribe @ SubscriptionUpdate::Subscribe(_)) => {
+								self.subscription_updates_waiting_to_be_sent.push_front(subscribe);
 								break;
 							},
 							None => break,
@@ -284,16 +294,33 @@ impl State {
 			NewConnectionIter::Multiple(unacked_packets.into_iter())
 		}
 	}
+
+	pub(super) fn update_subscription_handle(&self) -> UpdateSubscriptionHandle {
+		UpdateSubscriptionHandle(self.subscriptions_updated_send.clone())
+	}
 }
 
 impl Default for State {
 	fn default() -> Self {
+		let (subscriptions_updated_send, subscriptions_updated_recv) = futures::sync::mpsc::channel(0);
+
 		State {
 			subscriptions: Default::default(),
 
+			subscriptions_updated_send,
+			subscriptions_updated_recv,
+
+			subscription_updates_waiting_to_be_sent: Default::default(),
 			subscription_updates_waiting_to_be_acked: Default::default(),
 		}
 	}
+}
+
+/// The kind of subscription update
+#[derive(Clone, Debug)]
+enum SubscriptionUpdate {
+	Subscribe(crate::proto::SubscribeTo),
+	Unsubscribe(String),
 }
 
 #[derive(Debug)]
@@ -319,4 +346,47 @@ impl Iterator for NewConnectionIter {
 			NewConnectionIter::Multiple(packets) => packets.next(),
 		}
 	}
+}
+
+/// Used to update subscriptions
+pub struct UpdateSubscriptionHandle(futures::sync::mpsc::Sender<SubscriptionUpdate>);
+
+impl UpdateSubscriptionHandle {
+	/// Subscribe to a topic with the given parameters
+	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
+		self.0.clone()
+			.send(SubscriptionUpdate::Subscribe(subscribe_to))
+			.then(|result| match result {
+				Ok(_) => Ok(()),
+				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
+			})
+	}
+
+	/// Unsubscribe from the given topic
+	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
+		self.0.clone()
+			.send(SubscriptionUpdate::Unsubscribe(unsubscribe_from))
+			.then(|result| match result {
+				Ok(_) => Ok(()),
+				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
+			})
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum UpdateSubscriptionError {
+	ClientDoesNotExist,
+	NotReady,
+}
+
+impl std::fmt::Display for UpdateSubscriptionError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			UpdateSubscriptionError::ClientDoesNotExist => write!(f, "client does not exist"),
+			UpdateSubscriptionError::NotReady => write!(f, "too many subscription updates queued"),
+		}
+	}
+}
+
+impl std::error::Error for UpdateSubscriptionError {
 }

@@ -1,5 +1,12 @@
+use futures::{ Future, Sink, Stream };
+
 #[derive(Debug)]
 pub(super) struct State {
+	publish_request_send: futures::sync::mpsc::Sender<PublishRequest>,
+	publish_request_recv: futures::sync::mpsc::Receiver<PublishRequest>,
+
+	publish_requests_waiting_to_be_sent: std::collections::VecDeque<PublishRequest>,
+
 	/// Holds PUBLISH packets sent by us, waiting for a corresponding PUBACK or PUBREC
 	waiting_to_be_acked:
 		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Packet)>,
@@ -17,7 +24,6 @@ impl State {
 	pub(super) fn poll(
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
-		publish_requests_waiting_to_be_sent: &mut std::collections::VecDeque<super::PublishRequest>,
 		packet_identifiers: &mut super::PacketIdentifiers,
 	) -> Result<(Vec<crate::proto::Packet>, Option<crate::ReceivedPublication>), super::Error> {
 		let mut packets_waiting_to_be_sent = vec![];
@@ -122,7 +128,13 @@ impl State {
 			other => *packet = other,
 		}
 
-		while let Some(super::PublishRequest { publication, ack_sender }) = publish_requests_waiting_to_be_sent.pop_front() {
+
+		while let futures::Async::Ready(Some(publish_request)) = self.publish_request_recv.poll().expect("Receiver::poll cannot fail") {
+			self.publish_requests_waiting_to_be_sent.push_back(publish_request);
+		}
+
+
+		while let Some(PublishRequest { publication, ack_sender }) = self.publish_requests_waiting_to_be_sent.pop_front() {
 			match publication.qos {
 				crate::proto::QoS::AtMostOnce => {
 					packets_waiting_to_be_sent.push(crate::proto::Packet::Publish {
@@ -142,7 +154,7 @@ impl State {
 					let packet_identifier = match packet_identifiers.reserve() {
 						Ok(packet_identifier) => packet_identifier,
 						Err(err) => {
-							publish_requests_waiting_to_be_sent.push_front(super::PublishRequest { publication, ack_sender });
+							self.publish_requests_waiting_to_be_sent.push_front(PublishRequest { publication, ack_sender });
 							return Err(err);
 						},
 					};
@@ -168,7 +180,7 @@ impl State {
 					let packet_identifier = match packet_identifiers.reserve() {
 						Ok(packet_identifier) => packet_identifier,
 						Err(err) => {
-							publish_requests_waiting_to_be_sent.push_front(super::PublishRequest { publication, ack_sender });
+							self.publish_requests_waiting_to_be_sent.push_front(PublishRequest { publication, ack_sender });
 							return Err(err);
 						},
 					};
@@ -216,14 +228,75 @@ impl State {
 		}))
 		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| packet.clone()))
 	}
+
+	pub(super) fn publish_handle(&self) -> PublishHandle {
+		PublishHandle(self.publish_request_send.clone())
+	}
 }
 
 impl Default for State {
 	fn default() -> Self {
+		let (publish_request_send, publish_request_recv) = futures::sync::mpsc::channel(0);
+
 		State {
+			publish_request_send,
+			publish_request_recv,
+
+			publish_requests_waiting_to_be_sent: Default::default(),
 			waiting_to_be_acked: Default::default(),
 			waiting_to_be_released: Default::default(),
 			waiting_to_be_completed: Default::default(),
 		}
 	}
+}
+
+/// Used to publish messages to the server
+pub struct PublishHandle(futures::sync::mpsc::Sender<PublishRequest>);
+
+impl PublishHandle {
+	/// Publish the given message to the server
+	pub fn publish(&mut self, publication: Publication) -> impl Future<Item = (), Error = PublishError> {
+		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
+
+		self.0.clone()
+			.send(PublishRequest { publication, ack_sender })
+			.then(|result| match result {
+				Ok(_) => Ok(ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)),
+				Err(_) => Err(PublishError::ClientDoesNotExist)
+			})
+			.flatten()
+	}
+}
+
+#[derive(Debug)]
+pub enum PublishError {
+	ClientDoesNotExist,
+	NotReady(Publication),
+}
+
+impl std::fmt::Display for PublishError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
+			PublishError::NotReady(_) => write!(f, "too many publish requests queued"),
+		}
+	}
+}
+
+impl std::error::Error for PublishError {
+}
+
+#[derive(Debug)]
+struct PublishRequest {
+	publication: Publication,
+	ack_sender: futures::sync::oneshot::Sender<()>,
+}
+
+/// A message that can be published to the server
+#[derive(Debug)]
+pub struct Publication {
+	pub topic_name: String,
+	pub qos: crate::proto::QoS,
+	pub retain: bool,
+	pub payload: Vec<u8>,
 }

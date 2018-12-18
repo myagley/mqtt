@@ -5,6 +5,9 @@ mod ping;
 mod publish;
 mod subscriptions;
 
+pub use self::publish::{ Publication, PublishError, PublishHandle };
+pub use self::subscriptions::{ UpdateSubscriptionError, UpdateSubscriptionHandle };
+
 /// An MQTT client
 #[derive(Debug)]
 pub struct Client<IoS> where IoS: IoSource {
@@ -12,14 +15,6 @@ pub struct Client<IoS> where IoS: IoSource {
 	username: Option<String>,
 	password: Option<String>,
 	keep_alive: std::time::Duration,
-
-	publish_request_send: futures::sync::mpsc::Sender<PublishRequest>,
-	publish_request_recv: futures::sync::mpsc::Receiver<PublishRequest>,
-	publish_requests_waiting_to_be_sent: std::collections::VecDeque<PublishRequest>,
-
-	subscriptions_updated_send: futures::sync::mpsc::Sender<SubscriptionUpdate>,
-	subscriptions_updated_recv: futures::sync::mpsc::Receiver<SubscriptionUpdate>,
-	subscription_updates_waiting_to_be_sent: std::collections::VecDeque<SubscriptionUpdate>,
 
 	packet_identifiers: PacketIdentifiers,
 
@@ -68,22 +63,11 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 			None => crate::proto::ClientId::ServerGenerated,
 		};
 
-		let (subscriptions_updated_send, subscriptions_updated_recv) = futures::sync::mpsc::channel(0);
-		let (publish_request_send, publish_request_recv) = futures::sync::mpsc::channel(0);
-
 		Client {
 			client_id,
 			username,
 			password,
 			keep_alive,
-
-			publish_request_send,
-			publish_request_recv,
-			publish_requests_waiting_to_be_sent: Default::default(),
-
-			subscriptions_updated_send,
-			subscriptions_updated_recv,
-			subscription_updates_waiting_to_be_sent: Default::default(),
 
 			packet_identifiers: Default::default(),
 
@@ -100,12 +84,12 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 impl<IoS> Client<IoS> where IoS: IoSource {
 	/// Returns a handle that can be used to publish messages to the server
 	pub fn publish_handle(&self) -> PublishHandle {
-		PublishHandle(self.publish_request_send.clone())
+		self.publish.publish_handle()
 	}
 
 	/// Returns a handle that can be used to update subscriptions
 	pub fn update_subscription_handle(&self) -> UpdateSubscriptionHandle {
-		UpdateSubscriptionHandle(self.subscriptions_updated_send.clone())
+		self.subscriptions.update_subscription_handle()
 	}
 }
 
@@ -141,10 +125,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 			match client_poll(
 				framed,
 				self.keep_alive,
-				&mut self.publish_request_recv,
-				&mut self.publish_requests_waiting_to_be_sent,
-				&mut self.subscriptions_updated_recv,
-				&mut self.subscription_updates_waiting_to_be_sent,
 				&mut self.packets_waiting_to_be_sent,
 				&mut self.packet_identifiers,
 				&mut self.ping,
@@ -205,107 +185,6 @@ where
 	}
 }
 
-/// Used to update subscriptions
-pub struct UpdateSubscriptionHandle(futures::sync::mpsc::Sender<SubscriptionUpdate>);
-
-impl UpdateSubscriptionHandle {
-	/// Subscribe to a topic with the given parameters
-	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
-		self.0.clone()
-			.send(SubscriptionUpdate::Subscribe(subscribe_to))
-			.then(|result| match result {
-				Ok(_) => Ok(()),
-				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
-			})
-	}
-
-	/// Unsubscribe from the given topic
-	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
-		self.0.clone()
-			.send(SubscriptionUpdate::Unsubscribe(unsubscribe_from))
-			.then(|result| match result {
-				Ok(_) => Ok(()),
-				Err(_) => Err(UpdateSubscriptionError::ClientDoesNotExist),
-			})
-	}
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum UpdateSubscriptionError {
-	ClientDoesNotExist,
-	NotReady,
-}
-
-impl std::fmt::Display for UpdateSubscriptionError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			UpdateSubscriptionError::ClientDoesNotExist => write!(f, "client does not exist"),
-			UpdateSubscriptionError::NotReady => write!(f, "too many subscription updates queued"),
-		}
-	}
-}
-
-impl std::error::Error for UpdateSubscriptionError {
-}
-
-/// The kind of subscription update
-#[derive(Clone, Debug)]
-enum SubscriptionUpdate {
-	Subscribe(crate::proto::SubscribeTo),
-	Unsubscribe(String),
-}
-
-/// Used to publish messages to the server
-pub struct PublishHandle(futures::sync::mpsc::Sender<PublishRequest>);
-
-impl PublishHandle {
-	/// Publish the given message to the server
-	pub fn publish(&mut self, publication: Publication) -> impl Future<Item = (), Error = PublishError> {
-		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
-
-		self.0.clone()
-			.send(PublishRequest { publication, ack_sender })
-			.then(|result| match result {
-				Ok(_) => Ok(ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)),
-				Err(_) => Err(PublishError::ClientDoesNotExist)
-			})
-			.flatten()
-	}
-}
-
-#[derive(Debug)]
-pub enum PublishError {
-	ClientDoesNotExist,
-	NotReady(Publication),
-}
-
-impl std::fmt::Display for PublishError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
-			PublishError::NotReady(_) => write!(f, "too many publish requests queued"),
-		}
-	}
-}
-
-impl std::error::Error for PublishError {
-}
-
-#[derive(Debug)]
-struct PublishRequest {
-	publication: Publication,
-	ack_sender: futures::sync::oneshot::Sender<()>,
-}
-
-/// A message that can be published to the server
-#[derive(Debug)]
-pub struct Publication {
-	pub topic_name: String,
-	pub qos: crate::proto::QoS,
-	pub retain: bool,
-	pub payload: Vec<u8>,
-}
-
 /// A message that was received from the server
 #[derive(Debug)]
 pub struct ReceivedPublication {
@@ -318,10 +197,6 @@ pub struct ReceivedPublication {
 fn client_poll<S>(
 	framed: &mut crate::logging_framed::LoggingFramed<S>,
 	keep_alive: std::time::Duration,
-	publish_request_recv: &mut futures::sync::mpsc::Receiver<PublishRequest>,
-	publish_requests_waiting_to_be_sent: &mut std::collections::VecDeque<PublishRequest>,
-	subscriptions_updated_recv: &mut futures::sync::mpsc::Receiver<SubscriptionUpdate>,
-	subscription_updates_waiting_to_be_sent: &mut std::collections::VecDeque<SubscriptionUpdate>,
 	packets_waiting_to_be_sent: &mut std::collections::VecDeque<crate::proto::Packet>,
 	packet_identifiers: &mut PacketIdentifiers,
 	ping: &mut self::ping::State,
@@ -365,63 +240,29 @@ where
 
 		let mut new_packets_to_be_sent = vec![];
 
-		// ----
-		// Ping
-		// ----
 
+		// Ping
 		match ping.poll(&mut packet, keep_alive)? {
 			futures::Async::Ready(packet) => new_packets_to_be_sent.push(packet),
 			futures::Async::NotReady => (),
 		}
 
-		// -------
 		// Publish
-		// -------
-
-		loop {
-			match publish_request_recv.poll().expect("Receiver::poll cannot fail") {
-				futures::Async::Ready(Some(publish_request)) =>
-					publish_requests_waiting_to_be_sent.push_back(publish_request),
-
-				futures::Async::Ready(None) |
-				futures::Async::NotReady =>
-					break,
-			}
-		}
-
 		let (new_publish_packets, new_publication_received) = publish.poll(
 			&mut packet,
-			publish_requests_waiting_to_be_sent,
 			packet_identifiers,
 		)?;
-
 		new_packets_to_be_sent.extend(new_publish_packets);
 		if let Some(new_publication_received) = new_publication_received {
 			publications_received.push(new_publication_received);
 		}
 
-		// -------------
 		// Subscriptions
-		// -------------
-
-		loop {
-			match subscriptions_updated_recv.poll().expect("Receiver::poll cannot fail") {
-				futures::Async::Ready(Some(subscription_to_update)) =>
-					subscription_updates_waiting_to_be_sent.push_back(subscription_to_update),
-
-				futures::Async::Ready(None) |
-				futures::Async::NotReady =>
-					break,
-			}
-		}
-
 		new_packets_to_be_sent.extend(subscriptions.poll(
 			&mut packet,
-			subscription_updates_waiting_to_be_sent,
 			packet_identifiers,
 		)?);
 
-		// ---
 
 		assert!(packet.is_none(), "unconsumed packet");
 
