@@ -347,6 +347,7 @@ impl Default for PacketIdentifiers {
 #[derive(Debug)]
 pub enum Error {
 	DecodePacket(crate::proto::DecodeError),
+	DuplicateExactlyOncePublishPacketNotMarkedDuplicate(crate::proto::PacketIdentifier),
 	EncodePacket(crate::proto::EncodeError),
 	PacketIdentifiersExhausted,
 	PingTimer(tokio::timer::Error),
@@ -380,6 +381,13 @@ impl std::fmt::Display for Error {
 		match self {
 			Error::DecodePacket(err) =>
 				write!(f, "could not decode packet: {}", err),
+
+			Error::DuplicateExactlyOncePublishPacketNotMarkedDuplicate(packet_identifier) =>
+				write!(
+					f,
+					"server sent a new ExactlyOnce PUBLISH packet {} with the same packet identifier as another unacknowledged ExactlyOnce PUBLISH packet",
+					packet_identifier,
+				),
 
 			Error::EncodePacket(err) =>
 				write!(f, "could not encode packet: {}", err),
@@ -416,6 +424,7 @@ impl std::error::Error for Error {
 		#[allow(clippy::match_same_arms)]
 		match self {
 			Error::DecodePacket(err) => Some(err),
+			Error::DuplicateExactlyOncePublishPacketNotMarkedDuplicate(_) => None,
 			Error::EncodePacket(err) => Some(err),
 			Error::PacketIdentifiersExhausted => None,
 			Error::PingTimer(err) => Some(err),

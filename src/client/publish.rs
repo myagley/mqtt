@@ -83,7 +83,9 @@ impl State {
 						std::collections::btree_map::Entry::Occupied(_) =>
 							// This PUBLISH was already received earlier and a PUBREC sent in response, but the server apparently didn't receive it.
 							// Send another PUBREC and ignore this PUBLISH.
-							assert!(dup), // TODO: Return "misbehaving server" error and ensure session is reset
+							if !dup {
+								return Err(super::Error::DuplicateExactlyOncePublishPacketNotMarkedDuplicate(packet_identifier));
+							},
 
 						std::collections::btree_map::Entry::Vacant(entry) => {
 							// ExactlyOnce publications should only be sent to the client when the corresponding PUBREL is received.
