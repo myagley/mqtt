@@ -161,6 +161,9 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 						log::warn!("client will reconnect because of error: {}", err);
 
 						// Ensure clean session
+						//
+						// DEVNOTE: subscriptions::State relies on the fact that the session is reset here.
+						// Update that if this ever changes.
 						self.client_id = match std::mem::replace(&mut self.client_id, crate::proto::ClientId::ServerGenerated) {
 							id @ crate::proto::ClientId::ServerGenerated |
 							id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
@@ -510,8 +513,16 @@ pub enum Error {
 	SubAckDoesNotContainEnoughQoS(crate::proto::PacketIdentifier, usize, usize),
 	SubscriptionDowngraded(String, crate::proto::QoS, crate::proto::QoS),
 	SubscriptionFailed,
-	UnrecognizedSubAck(crate::proto::PacketIdentifier),
-	UnrecognizedUnsubAck(crate::proto::PacketIdentifier),
+	UnexpectedSubAck(crate::proto::PacketIdentifier, UnexpectedSubUnsubAckReason),
+	UnexpectedUnsubAck(crate::proto::PacketIdentifier, UnexpectedSubUnsubAckReason),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum UnexpectedSubUnsubAckReason {
+	DidNotExpect,
+	Expected(crate::proto::PacketIdentifier),
+	ExpectedSubAck(crate::proto::PacketIdentifier),
+	ExpectedUnsubAck(crate::proto::PacketIdentifier),
 }
 
 impl Error {
@@ -550,11 +561,11 @@ impl std::fmt::Display for Error {
 			Error::SubscriptionFailed =>
 				write!(f, "Server rejected one or more subscriptions"),
 
-			Error::UnrecognizedSubAck(packet_identifier) =>
-				write!(f, "received SUBACK {} for SUBSCRIBE we never sent", packet_identifier),
+			Error::UnexpectedSubAck(packet_identifier, reason) =>
+				write!(f, "received SUBACK {} but {}", packet_identifier, reason),
 
-			Error::UnrecognizedUnsubAck(packet_identifier) =>
-				write!(f, "received UNSUBACK {} for UNSUBSCRIBE we never sent", packet_identifier),
+			Error::UnexpectedUnsubAck(packet_identifier, reason) =>
+				write!(f, "received UNSUBACK {} but {}", packet_identifier, reason),
 		}
 	}
 }
@@ -571,8 +582,19 @@ impl std::error::Error for Error {
 			Error::SubAckDoesNotContainEnoughQoS(_, _, _) => None,
 			Error::SubscriptionDowngraded(_, _, _) => None,
 			Error::SubscriptionFailed => None,
-			Error::UnrecognizedSubAck(_) => None,
-			Error::UnrecognizedUnsubAck(_) => None,
+			Error::UnexpectedSubAck(_, _) => None,
+			Error::UnexpectedUnsubAck(_, _) => None,
+		}
+	}
+}
+
+impl std::fmt::Display for UnexpectedSubUnsubAckReason {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			UnexpectedSubUnsubAckReason::DidNotExpect => write!(f, "did not expect it"),
+			UnexpectedSubUnsubAckReason::Expected(packet_identifier) => write!(f, "expected {}", packet_identifier),
+			UnexpectedSubUnsubAckReason::ExpectedSubAck(packet_identifier) => write!(f, "expected SUBACK {}", packet_identifier),
+			UnexpectedSubUnsubAckReason::ExpectedUnsubAck(packet_identifier) => write!(f, "expected UNSUBACK {}", packet_identifier),
 		}
 	}
 }
