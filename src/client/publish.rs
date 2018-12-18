@@ -11,9 +11,10 @@ pub(super) struct State {
 	waiting_to_be_acked:
 		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Packet)>,
 
-	/// Holds the identifiers of PUBREC packets sent by us, waiting for a corresponding PUBREL
+	/// Holds the identifiers of PUBREC packets sent by us, waiting for a corresponding PUBREL,
+	/// and the contents of the original PUBLISH packet for which we sent the PUBREC
 	waiting_to_be_released:
-		std::collections::BTreeSet<crate::proto::PacketIdentifier>,
+		std::collections::BTreeMap<crate::proto::PacketIdentifier, crate::ReceivedPublication>,
 
 	/// Holds PUBLISH packets sent by us, waiting for a corresponding PUBCOMP
 	waiting_to_be_completed:
@@ -54,49 +55,52 @@ impl State {
 				None => log::warn!("ignoring PUBCOMP for a PUBREL we never sent"),
 			},
 
-			Some(crate::proto::Packet::Publish { packet_identifier_dup_qos, topic_name, payload, .. }) => {
-				let dup_qos = match packet_identifier_dup_qos {
-					crate::proto::PacketIdentifierDupQoS::AtMostOnce => Some((false, crate::proto::QoS::AtMostOnce)),
+			Some(crate::proto::Packet::Publish { packet_identifier_dup_qos, topic_name, payload, .. }) => match packet_identifier_dup_qos {
+				crate::proto::PacketIdentifierDupQoS::AtMostOnce => {
+					publication_received = Some(crate::ReceivedPublication {
+						topic_name,
+						dup: false,
+						qos: crate::proto::QoS::AtMostOnce,
+						payload,
+					});
+				},
 
-					crate::proto::PacketIdentifierDupQoS::AtLeastOnce(_, dup) => Some((dup, crate::proto::QoS::AtLeastOnce)),
-
-					crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, dup) =>
-						if self.waiting_to_be_released.contains(&packet_identifier) {
-							// This PUBLISH was already received earlier and a PUBREC sent in response, but the server apparently didn't receive it.
-							// Send another PUBREC and ignore this PUBLISH.
-
-							assert!(dup); // TODO: Return "misbehaving server" error and ensure session is reset
-
-							None
-						}
-						else {
-							self.waiting_to_be_released.insert(packet_identifier);
-
-							Some((dup, crate::proto::QoS::ExactlyOnce))
-						},
-				};
-
-				if let Some((dup, qos)) = dup_qos {
+				crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, dup) => {
 					publication_received = Some(crate::ReceivedPublication {
 						topic_name,
 						dup,
-						qos,
+						qos: crate::proto::QoS::AtLeastOnce,
 						payload,
 					});
-				}
 
-				match packet_identifier_dup_qos {
-					crate::proto::PacketIdentifierDupQoS::AtMostOnce => (),
-					crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, _) =>
-						packets_waiting_to_be_sent.push(crate::proto::Packet::PubAck {
-							packet_identifier,
-						}),
-					crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, _) => {
-						packets_waiting_to_be_sent.push(crate::proto::Packet::PubRec {
-							packet_identifier,
-						});
-					},
-				}
+					packets_waiting_to_be_sent.push(crate::proto::Packet::PubAck {
+						packet_identifier,
+					});
+				},
+
+				crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, dup) => {
+					match self.waiting_to_be_released.entry(packet_identifier) {
+						std::collections::btree_map::Entry::Occupied(_) =>
+							// This PUBLISH was already received earlier and a PUBREC sent in response, but the server apparently didn't receive it.
+							// Send another PUBREC and ignore this PUBLISH.
+							assert!(dup), // TODO: Return "misbehaving server" error and ensure session is reset
+
+						std::collections::btree_map::Entry::Vacant(entry) => {
+							// ExactlyOnce publications should only be sent to the client when the corresponding PUBREL is received.
+							// Otherwise the server might send the PUBLISH again after a session reset and we would have no way of knowing we should ignore it.
+							entry.insert(crate::ReceivedPublication {
+								topic_name,
+								dup,
+								qos: crate::proto::QoS::ExactlyOnce,
+								payload,
+							});
+						},
+					}
+
+					packets_waiting_to_be_sent.push(crate::proto::Packet::PubRec {
+						packet_identifier,
+					});
+				},
 			},
 
 			Some(crate::proto::Packet::PubRec { packet_identifier }) => {
@@ -113,8 +117,9 @@ impl State {
 			},
 
 			Some(crate::proto::Packet::PubRel { packet_identifier }) => {
-				if self.waiting_to_be_released.remove(&packet_identifier) {
+				if let Some(publication) = self.waiting_to_be_released.remove(&packet_identifier) {
 					packet_identifiers.discard(packet_identifier);
+					publication_received = Some(publication);
 				}
 				else {
 					log::warn!("ignoring PUBREL for a PUBREC we never sent");
@@ -217,13 +222,13 @@ impl State {
 			self.waiting_to_be_acked.append(&mut self.waiting_to_be_completed);
 
 			// Clear waiting_to_be_released
-			for packet_identifier in std::mem::replace(&mut self.waiting_to_be_released, Default::default()) {
+			for (packet_identifier, _) in std::mem::replace(&mut self.waiting_to_be_released, Default::default()) {
 				packet_identifiers.discard(packet_identifier);
 			}
 		}
 
 		self.waiting_to_be_acked.values().map(|(_, packet)| packet.clone())
-		.chain(self.waiting_to_be_released.iter().map(|&packet_identifier| crate::proto::Packet::PubRec {
+		.chain(self.waiting_to_be_released.keys().map(|&packet_identifier| crate::proto::Packet::PubRec {
 			packet_identifier,
 		}))
 		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| packet.clone()))
