@@ -8,7 +8,14 @@ mod subscriptions;
 pub use self::publish::{ Publication, PublishError, PublishHandle };
 pub use self::subscriptions::{ UpdateSubscriptionError, UpdateSubscriptionHandle };
 
-/// An MQTT client
+/// An MQTT v3.1.1 client.
+///
+/// A `Client` is a [`Stream`] of [publications received from the server.](struct.ReceivedPublication.html)
+/// It automatically reconnects if the connection to the server is broken, and handles session state.
+///
+/// Publish messages to the server using the handle returned by [`Client::publish_handle`].
+///
+/// Subscribe to and unsubscribe from topics using the handle returned by [`Client::update_subscription_handle`].
 #[derive(Debug)]
 pub struct Client<IoS> where IoS: IoSource {
 	client_id: crate::proto::ClientId,
