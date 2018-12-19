@@ -262,7 +262,7 @@ pub struct PublishHandle(futures::sync::mpsc::Sender<PublishRequest>);
 
 impl PublishHandle {
 	/// Publish the given message to the server
-	pub fn publish(&mut self, publication: Publication) -> impl Future<Item = (), Error = PublishError> {
+	pub fn publish(&mut self, publication: crate::proto::Publication) -> impl Future<Item = (), Error = PublishError> {
 		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
 
 		self.0.clone()
@@ -293,15 +293,6 @@ impl std::error::Error for PublishError {
 
 #[derive(Debug)]
 struct PublishRequest {
-	publication: Publication,
+	publication: crate::proto::Publication,
 	ack_sender: futures::sync::oneshot::Sender<()>,
-}
-
-/// A message that can be published to the server
-#[derive(Debug)]
-pub struct Publication {
-	pub topic_name: String,
-	pub qos: crate::proto::QoS,
-	pub retain: bool,
-	pub payload: Vec<u8>,
 }

@@ -13,10 +13,12 @@ pub enum Packet {
 	Connect {
 		username: Option<String>,
 		password: Option<String>,
-		// TODO: will
+		will: Option<Publication>,
 		client_id: super::ClientId,
 		keep_alive: std::time::Duration,
 	},
+
+	Disconnect,
 
 	/// Ref: 3.12 PINGREQ – PING request
 	PingReq,
@@ -82,6 +84,9 @@ impl Packet {
 
 	/// The type of a [`Packet::Connect`]
 	pub const CONNECT: u8 = 0x10;
+
+	/// The type of a [`Packet::Disconnect`]
+	pub const DISCONNECT: u8 = 0xE0;
 
 	/// The type of a [`Packet::PingReq`]
 	pub const PINGREQ: u8 = 0xC0;
@@ -160,6 +165,15 @@ impl From<QoS> for u8 {
 pub enum SubAckQos {
 	Success(QoS),
 	Failure,
+}
+
+/// A message that can be published to the server
+#[derive(Clone, Debug)]
+pub struct Publication {
+	pub topic_name: String,
+	pub qos: crate::proto::QoS,
+	pub retain: bool,
+	pub payload: Vec<u8>,
 }
 
 /// A tokio codec that encodes and decodes MQTT packets.
@@ -377,7 +391,7 @@ impl tokio::codec::Encoder for PacketCodec {
 		match item {
 			Packet::ConnAck { .. } => unimplemented!(),
 
-			Packet::Connect { username, password, client_id, keep_alive } => encode_packet(dst, Packet::CONNECT, |dst| {
+			Packet::Connect { username, password, will, client_id, keep_alive } => encode_packet(dst, Packet::CONNECT, |dst| {
 				dst.extend_from_slice(b"\x00\x04MQTT");
 				dst.append_u8(0x04_u8);
 				{
@@ -387,6 +401,17 @@ impl tokio::codec::Encoder for PacketCodec {
 					}
 					if password.is_some() {
 						connect_flags |= 0x40;
+					}
+					if let Some(will) = &will {
+						if will.retain {
+							connect_flags |= 0x20;
+						}
+						connect_flags |= match will.qos {
+							QoS::AtMostOnce => 0x00,
+							QoS::AtLeastOnce => 0x08,
+							QoS::ExactlyOnce => 0x10,
+						};
+						connect_flags |= 0x04;
 					}
 					match client_id {
 						super::ClientId::ServerGenerated |
@@ -412,6 +437,18 @@ impl tokio::codec::Encoder for PacketCodec {
 					super::ClientId::IdWithCleanSession(id) |
 					super::ClientId::IdWithExistingSession(id) => super::Utf8StringCodec::default().encode(id, dst)?,
 				}
+
+				if let Some(will) = will {
+					super::Utf8StringCodec::default().encode(will.topic_name, dst)?;
+					#[allow(clippy::cast_possible_truncation)]
+					let will_len = match will.payload.len() {
+						will_len if will_len <= u16::max_value() as usize => will_len as u16,
+						will_len => return Err(super::EncodeError::WillTooLarge(will_len)),
+					};
+					dst.append_u16_be(will_len);
+					dst.extend_from_slice(&will.payload);
+				}
+
 				if let Some(username) = username {
 					super::Utf8StringCodec::default().encode(username, dst)?;
 				}
@@ -422,6 +459,8 @@ impl tokio::codec::Encoder for PacketCodec {
 
 				Ok(())
 			})?,
+
+			Packet::Disconnect => encode_packet(dst, Packet::DISCONNECT, |_| Ok(()))?,
 
 			Packet::PingReq => encode_packet(dst, Packet::PINGREQ, |_| Ok(()))?,
 

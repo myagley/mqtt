@@ -78,12 +78,24 @@ fn main() {
 			client_id,
 			username,
 			password,
+			None,
 			move || tokio::net::TcpStream::connect(&server),
 			max_reconnect_back_off,
 			keep_alive,
 		);
 
-	let mut publish_handle = client.publish_handle();
+	let shutdown_handle = client.shutdown_handle().expect("couldn't get shutdown handle");
+	runtime.spawn(
+		tokio_signal::ctrl_c()
+		.flatten_stream()
+		.into_future()
+		.then(move |_| shutdown_handle.shutdown())
+		.then(|result| {
+			result.expect("couldn't send shutdown notification");
+			Ok(())
+		}));
+
+	let mut publish_handle = client.publish_handle().expect("couldn't get publish handle");
 	executor.clone().spawn(
 		tokio::timer::Interval::new(std::time::Instant::now(), publish_frequency)
 		.then(move |result| {
@@ -93,7 +105,7 @@ fn main() {
 			log::info!("Publishing to {} ...", topic);
 
 			executor.spawn(publish_handle
-				.publish(mqtt::Publication {
+				.publish(mqtt::proto::Publication {
 					topic_name: topic.clone(),
 					qos,
 					retain: false,

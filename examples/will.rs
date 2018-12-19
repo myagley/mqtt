@@ -1,6 +1,16 @@
+// This example demonstrates the use of a will.
+//
+// The client will connect to the server with a will built from the --topic, --qos and --payload parameters. It will then subscribe to the same topic.
+// If the client receives a Ctrl-C, it will exit without properly shutting down the client. Thus the client will not be able to send a DISCONNECT
+// to the server, so the server will publish the will to all subscribers.
+//
+// To demonstrate the effect, run two or more instances of this example with different client IDs (and optionally, different QoS and payloads)
+// but the same topic subscription, then kill one with Ctrl-C. The other instances should all receive the will.
+//
 // Example:
 //
-//     cargo run --example subscriber -- --server 127.0.0.1:1883 --client-id 'example-subscriber' --topic-filter foo --qos 1
+//     cargo run --example will -- --server 127.0.0.1:1883 --client-id 'example-will-1' --topic foo --qos 1 --payload '"goodbye, world"  - example-will-1'
+//     cargo run --example will -- --server 127.0.0.1:1883 --client-id 'example-will-2' --topic foo --qos 1 --payload '"goodbye, world"  - example-will-2'
 
 use futures::{ Future, Stream };
 
@@ -36,11 +46,14 @@ struct Options {
 	)]
 	keep_alive: std::time::Duration,
 
-	#[structopt(help = "The topic filter to subscribe to.", long = "topic-filter")]
-	topic_filter: String,
+	#[structopt(help = "The topic of the will.", long = "topic")]
+	topic: String,
 
-	#[structopt(help = "The QoS with which to subscribe to the topic.", long = "qos", parse(try_from_str = "common::qos_from_str"))]
+	#[structopt(help = "The QoS of the will.", long = "qos", parse(try_from_str = "common::qos_from_str"))]
 	qos: mqtt::proto::QoS,
+
+	#[structopt(help = "The payload of the will.", long = "payload")]
+	payload: String,
 }
 
 fn main() {
@@ -53,39 +66,36 @@ fn main() {
 		password,
 		max_reconnect_back_off,
 		keep_alive,
-		topic_filter,
+		topic,
 		qos,
+		payload,
 	} = structopt::StructOpt::from_args();
 
 	let mut runtime = tokio::runtime::Runtime::new().expect("couldn't initialize tokio runtime");
+
+	let will = mqtt::proto::Publication {
+		topic_name: topic.clone(),
+		qos,
+		retain: false,
+		payload: payload.into_bytes(),
+	};
 
 	let client =
 		mqtt::Client::new(
 			client_id,
 			username,
 			password,
-			None,
+			Some(will),
 			move || tokio::net::TcpStream::connect(&server),
 			max_reconnect_back_off,
 			keep_alive,
 		);
 
-	let shutdown_handle = client.shutdown_handle().expect("couldn't get shutdown handle");
-	runtime.spawn(
-		tokio_signal::ctrl_c()
-		.flatten_stream()
-		.into_future()
-		.then(move |_| shutdown_handle.shutdown())
-		.then(|result| {
-			result.expect("couldn't send shutdown notification");
-			Ok(())
-		}));
-
 	let mut update_subscription_handle = client.update_subscription_handle().expect("couldn't get subscription update handle");;
 	runtime.spawn(
 		update_subscription_handle
 		.subscribe(mqtt::proto::SubscribeTo {
-			topic_filter,
+			topic_filter: topic,
 			qos,
 		})
 		.map_err(|err| panic!("couldn't update subscription: {}", err)));

@@ -5,7 +5,7 @@ mod ping;
 mod publish;
 mod subscriptions;
 
-pub use self::publish::{ Publication, PublishError, PublishHandle };
+pub use self::publish::{ PublishError, PublishHandle };
 pub use self::subscriptions::{ UpdateSubscriptionError, UpdateSubscriptionHandle };
 
 /// An MQTT v3.1.1 client.
@@ -16,23 +16,12 @@ pub use self::subscriptions::{ UpdateSubscriptionError, UpdateSubscriptionHandle
 /// Publish messages to the server using the handle returned by [`Client::publish_handle`].
 ///
 /// Subscribe to and unsubscribe from topics using the handle returned by [`Client::update_subscription_handle`].
+///
+/// The [`Stream`] only ends (returns `Ready(None)`) when the client is told to shut down gracefully using the handle
+/// returned by [`Client::shutdown_handle`]. The `Client` becomes unusable after it has returned `None`
+/// and should be dropped.
 #[derive(Debug)]
-pub struct Client<IoS> where IoS: IoSource {
-	client_id: crate::proto::ClientId,
-	username: Option<String>,
-	password: Option<String>,
-	keep_alive: std::time::Duration,
-
-	packet_identifiers: PacketIdentifiers,
-
-	connect: self::connect::Connect<IoS>,
-	ping: self::ping::State,
-	publish: self::publish::State,
-	subscriptions: self::subscriptions::State,
-
-	/// Packets waiting to be written to the underlying `Framed`
-	packets_waiting_to_be_sent: std::collections::VecDeque<crate::proto::Packet>,
-}
+pub struct Client<IoS>(ClientState<IoS>) where IoS: IoSource;
 
 impl<IoS> Client<IoS> where IoS: IoSource {
 	/// Create a new client with the given parameters
@@ -61,6 +50,7 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 		client_id: Option<String>,
 		username: Option<String>,
 		password: Option<String>,
+		will: Option<crate::proto::Publication>,
 		io_source: IoS,
 		max_reconnect_back_off: std::time::Duration,
 		keep_alive: std::time::Duration,
@@ -70,11 +60,17 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 			None => crate::proto::ClientId::ServerGenerated,
 		};
 
-		Client {
+		let (shutdown_send, shutdown_recv) = futures::sync::mpsc::channel(0);
+
+		Client(ClientState::Up {
 			client_id,
 			username,
 			password,
+			will,
 			keep_alive,
+
+			shutdown_send,
+			shutdown_recv,
 
 			packet_identifiers: Default::default(),
 
@@ -84,19 +80,34 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 			subscriptions: Default::default(),
 
 			packets_waiting_to_be_sent: Default::default(),
-		}
+		})
 	}
-}
 
-impl<IoS> Client<IoS> where IoS: IoSource {
 	/// Returns a handle that can be used to publish messages to the server
-	pub fn publish_handle(&self) -> PublishHandle {
-		self.publish.publish_handle()
+	pub fn publish_handle(&self) -> Result<PublishHandle, PublishError> {
+		match &self.0 {
+			ClientState::Up { publish, .. } => Ok(publish.publish_handle()),
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => Err(PublishError::ClientDoesNotExist),
+		}
 	}
 
 	/// Returns a handle that can be used to update subscriptions
-	pub fn update_subscription_handle(&self) -> UpdateSubscriptionHandle {
-		self.subscriptions.update_subscription_handle()
+	pub fn update_subscription_handle(&self) -> Result<UpdateSubscriptionHandle, UpdateSubscriptionError> {
+		match &self.0 {
+			ClientState::Up { subscriptions, .. } => Ok(subscriptions.update_subscription_handle()),
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => Err(UpdateSubscriptionError::ClientDoesNotExist),
+		}
+	}
+
+	/// Returns a handle that can be used to signal the client to shut down
+	pub fn shutdown_handle(&self) -> Result<ShutdownHandle, ShutdownError> {
+		match &self.0 {
+			ClientState::Up { shutdown_send, .. } => Ok(ShutdownHandle(shutdown_send.clone())),
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => Err(ShutdownError::ClientDoesNotExist),
+		}
 	}
 }
 
@@ -105,61 +116,193 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 	type Error = Error;
 
 	fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
-		loop {
-			let self::connect::Connected { framed, new_connection, reset_session } = match self.connect.poll(
-				self.username.as_ref().map(AsRef::as_ref),
-				self.password.as_ref().map(AsRef::as_ref),
-				&mut self.client_id,
-				self.keep_alive,
-			) {
-				Ok(futures::Async::Ready(framed)) => framed,
-				Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
-				Err(()) => unreachable!(),
-			};
+		let reason = loop {
+			match &mut self.0 {
+				ClientState::Up {
+					client_id,
+					username,
+					password,
+					will,
+					keep_alive,
 
-			if new_connection {
-				log::debug!("New connection established");
+					shutdown_recv,
 
-				self.packets_waiting_to_be_sent = Default::default();
+					packet_identifiers,
 
-				self.ping.new_connection();
+					connect,
+					ping,
+					publish,
+					subscriptions,
 
-				self.packets_waiting_to_be_sent.extend(self.publish.new_connection(reset_session, &mut self.packet_identifiers));
+					packets_waiting_to_be_sent,
 
-				self.packets_waiting_to_be_sent.extend(self.subscriptions.new_connection(reset_session, &mut self.packet_identifiers));
-			}
+					..
+				} => {
+					match shutdown_recv.poll().expect("Receiver::poll cannot fail") {
+						futures::Async::Ready(Some(())) => break None,
 
-			match client_poll(
-				framed,
-				self.keep_alive,
-				&mut self.packets_waiting_to_be_sent,
-				&mut self.packet_identifiers,
-				&mut self.ping,
-				&mut self.publish,
-				&mut self.subscriptions,
-			) {
-				Ok(futures::Async::Ready(result)) => break Ok(futures::Async::Ready(Some(result))),
-				Ok(futures::Async::NotReady) => break Ok(futures::Async::NotReady),
-				Err(err) =>
-					if err.is_user_error() {
-						break Err(err);
+						futures::Async::Ready(None) |
+						futures::Async::NotReady => (),
 					}
-					else {
-						log::warn!("client will reconnect because of error: {}", err);
 
-						// Ensure clean session
-						//
-						// DEVNOTE: subscriptions::State relies on the fact that the session is reset here.
-						// Update that if this ever changes.
-						self.client_id = match std::mem::replace(&mut self.client_id, crate::proto::ClientId::ServerGenerated) {
-							id @ crate::proto::ClientId::ServerGenerated |
-							id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
-							crate::proto::ClientId::IdWithExistingSession(id) => crate::proto::ClientId::IdWithCleanSession(id),
-						};
+					let self::connect::Connected { framed, new_connection, reset_session } = match connect.poll(
+						username.as_ref().map(AsRef::as_ref),
+						password.as_ref().map(AsRef::as_ref),
+						will.as_ref(),
+						client_id,
+						*keep_alive,
+					) {
+						Ok(futures::Async::Ready(framed)) => framed,
+						Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
+						Err(()) => unreachable!(),
+					};
 
-						self.connect.reconnect();
-					},
+					if new_connection {
+						log::debug!("New connection established");
+
+						*packets_waiting_to_be_sent = Default::default();
+
+						ping.new_connection();
+
+						packets_waiting_to_be_sent.extend(publish.new_connection(reset_session, packet_identifiers));
+
+						packets_waiting_to_be_sent.extend(subscriptions.new_connection(reset_session, packet_identifiers));
+					}
+
+					match client_poll(
+						framed,
+						*keep_alive,
+						packets_waiting_to_be_sent,
+						packet_identifiers,
+						ping,
+						publish,
+						subscriptions,
+					) {
+						Ok(futures::Async::Ready(result)) => return Ok(futures::Async::Ready(Some(result))),
+						Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
+						Err(err) =>
+							if err.is_user_error() {
+								break Some(err);
+							}
+							else {
+								log::warn!("client will reconnect because of error: {}", err);
+
+								// Ensure clean session
+								//
+								// DEVNOTE: subscriptions::State relies on the fact that the session is reset here.
+								// Update that if this ever changes.
+								*client_id = match std::mem::replace(client_id, crate::proto::ClientId::ServerGenerated) {
+									id @ crate::proto::ClientId::ServerGenerated |
+									id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
+									crate::proto::ClientId::IdWithExistingSession(id) => crate::proto::ClientId::IdWithCleanSession(id),
+								};
+
+								connect.reconnect();
+							},
+					}
+				},
+
+				ClientState::ShuttingDown {
+					client_id,
+					username,
+					password,
+					will,
+					keep_alive,
+
+					connect,
+
+					sent_disconnect,
+
+					reason,
+				} => {
+					let self::connect::Connected { framed, .. } = match connect.poll(
+						username.as_ref().map(AsRef::as_ref),
+						password.as_ref().map(AsRef::as_ref),
+						will.as_ref(),
+						client_id,
+						*keep_alive,
+					) {
+						Ok(futures::Async::Ready(framed)) => framed,
+						Ok(futures::Async::NotReady) => {
+							// Already disconnected
+							self.0 = ClientState::ShutDown { reason: reason.take() };
+							continue;
+						},
+						Err(()) => unreachable!(),
+					};
+
+					loop {
+						if *sent_disconnect {
+							match framed.poll_complete().map_err(Error::EncodePacket) {
+								Ok(futures::Async::Ready(())) => {
+									self.0 = ClientState::ShutDown { reason: reason.take() };
+									break;
+								},
+
+								Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
+
+								Err(err) => {
+									log::warn!("couldn't send DISCONNECT: {}", err);
+									self.0 = ClientState::ShutDown { reason: reason.take() };
+									break;
+								},
+							}
+						}
+						else {
+							match framed.start_send(crate::proto::Packet::Disconnect) {
+								Ok(futures::AsyncSink::Ready) => *sent_disconnect = true,
+
+								Ok(futures::AsyncSink::NotReady(_)) => return Ok(futures::Async::NotReady),
+
+								Err(err) => {
+									log::warn!("couldn't send DISCONNECT: {}", err);
+									self.0 = ClientState::ShutDown { reason: reason.take() };
+									break;
+								},
+							}
+						}
+					}
+				},
+
+				ClientState::ShutDown { reason } => match reason.take() {
+					Some(err) => return Err(err),
+					None => return Ok(futures::Async::Ready(None)),
+				},
 			}
+		};
+
+		// If we're here, then we're transitioning from Up to ShuttingDown
+
+		match std::mem::replace(&mut self.0, ClientState::ShutDown { reason: None }) {
+			ClientState::Up {
+				client_id,
+				username,
+				password,
+				will,
+				keep_alive,
+
+				connect,
+				..
+			} => {
+				log::warn!("Shutting down...");
+
+				self.0 = ClientState::ShuttingDown {
+					client_id,
+					username,
+					password,
+					will,
+					keep_alive,
+
+					connect,
+
+					sent_disconnect: false,
+
+					reason,
+				};
+				self.poll()
+			},
+
+			_ => unreachable!(),
 		}
 	}
 }
@@ -199,6 +342,66 @@ pub struct ReceivedPublication {
 	pub dup: bool,
 	pub qos: crate::proto::QoS,
 	pub payload: Vec<u8>,
+}
+
+pub struct ShutdownHandle(futures::sync::mpsc::Sender<()>);
+
+impl ShutdownHandle {
+	/// Signals the [`Client`] to shut down.
+	///
+	/// The returned `Future` resolves when the `Client` is guaranteed the notification,
+	/// not necessarily when the `Client` has completed shutting down.
+	pub fn shutdown(&self) -> impl Future<Item = (), Error = ShutdownError> {
+		self.0.clone().send(()).then(|result| match result {
+			Ok(_) => Ok(()),
+			Err(_) => Err(ShutdownError::ClientDoesNotExist),
+		})
+	}
+}
+
+#[derive(Debug)]
+enum ClientState<IoS> where IoS: IoSource {
+	Up {
+		client_id: crate::proto::ClientId,
+		username: Option<String>,
+		password: Option<String>,
+		will: Option<crate::proto::Publication>,
+		keep_alive: std::time::Duration,
+
+		shutdown_send: futures::sync::mpsc::Sender<()>,
+		shutdown_recv: futures::sync::mpsc::Receiver<()>,
+
+		packet_identifiers: PacketIdentifiers,
+
+		connect: self::connect::Connect<IoS>,
+		ping: self::ping::State,
+		publish: self::publish::State,
+		subscriptions: self::subscriptions::State,
+
+		/// Packets waiting to be written to the underlying `Framed`
+		packets_waiting_to_be_sent: std::collections::VecDeque<crate::proto::Packet>,
+	},
+
+	ShuttingDown {
+		client_id: crate::proto::ClientId,
+		username: Option<String>,
+		password: Option<String>,
+		will: Option<crate::proto::Publication>,
+		keep_alive: std::time::Duration,
+
+		connect: self::connect::Connect<IoS>,
+
+		/// If the DISCONNECT packet has already been sent
+		sent_disconnect: bool,
+
+		/// The Error that caused the Client to transition away from Up, if any
+		reason: Option<Error>,
+	},
+
+	ShutDown {
+		/// The Error that caused the Client to transition away from Up, if any
+		reason: Option<Error>,
+	},
 }
 
 fn client_poll<S>(
@@ -454,4 +657,21 @@ impl std::fmt::Display for UnexpectedSubUnsubAckReason {
 			UnexpectedSubUnsubAckReason::ExpectedUnsubAck(packet_identifier) => write!(f, "expected UNSUBACK {}", packet_identifier),
 		}
 	}
+}
+
+#[derive(Debug)]
+pub enum ShutdownError {
+	ClientDoesNotExist,
+}
+
+impl std::fmt::Display for ShutdownError {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			ShutdownError::ClientDoesNotExist =>
+				write!(f, "client does not exist"),
+		}
+	}
+}
+
+impl std::error::Error for ShutdownError {
 }

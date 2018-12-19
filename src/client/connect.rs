@@ -60,6 +60,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 		&'a mut self,
 		username: Option<&str>,
 		password: Option<&str>,
+		will: Option<&crate::proto::Publication>,
 		client_id: &mut crate::proto::ClientId,
 		keep_alive: std::time::Duration,
 	) -> futures::Poll<Connected<'a, IoS>, ()> {
@@ -111,6 +112,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					let packet = crate::proto::Packet::Connect {
 						username: username.map(ToOwned::to_owned),
 						password: password.map(ToOwned::to_owned),
+						will: will.cloned(),
 						client_id: client_id.clone(),
 						keep_alive,
 					};

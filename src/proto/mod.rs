@@ -6,7 +6,15 @@ use bytes::{ Buf, BufMut, IntoBuf };
 
 mod packet;
 
-pub use self::packet::{ Packet, PacketCodec, PacketIdentifierDupQoS, QoS, SubAckQos, SubscribeTo };
+pub use self::packet::{
+	Packet,
+	PacketCodec,
+	PacketIdentifierDupQoS,
+	Publication,
+	QoS,
+	SubAckQos,
+	SubscribeTo,
+};
 
 /// The client ID
 ///
@@ -339,6 +347,7 @@ pub enum EncodeError {
 	KeepAliveTooHigh(std::time::Duration),
 	RemainingLengthTooHigh(usize),
 	StringTooLarge(usize),
+	WillTooLarge(usize),
 }
 
 impl EncodeError {
@@ -349,6 +358,7 @@ impl EncodeError {
 			EncodeError::KeepAliveTooHigh(_) => true,
 			EncodeError::RemainingLengthTooHigh(_) => true,
 			EncodeError::StringTooLarge(_) => true,
+			EncodeError::WillTooLarge(_) => true,
 		}
 	}
 }
@@ -360,6 +370,7 @@ impl std::fmt::Display for EncodeError {
 			EncodeError::KeepAliveTooHigh(keep_alive) => write!(f, "keep-alive {:?} is too high", keep_alive),
 			EncodeError::RemainingLengthTooHigh(len) => write!(f, "remaining length {} is too high to be encoded", len),
 			EncodeError::StringTooLarge(len) => write!(f, "string of length {} is too large to be encoded", len),
+			EncodeError::WillTooLarge(len) => write!(f, "will payload of length {} is too large to be encoded", len),
 		}
 	}
 }
@@ -372,6 +383,7 @@ impl std::error::Error for EncodeError {
 			EncodeError::KeepAliveTooHigh(_) => None,
 			EncodeError::RemainingLengthTooHigh(_) => None,
 			EncodeError::StringTooLarge(_) => None,
+			EncodeError::WillTooLarge(_) => None,
 		}
 	}
 }

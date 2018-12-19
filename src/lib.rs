@@ -6,6 +6,7 @@
 #![deny(clippy::all, clippy::pedantic)]
 #![allow(
 	clippy::default_trait_access,
+	clippy::large_enum_variant,
 	clippy::pub_enum_variant_names,
 	clippy::similar_names,
 	clippy::single_match_else,
@@ -19,10 +20,11 @@ pub use self::client::{
 	Client,
 	Error,
 	IoSource,
-	Publication,
 	PublishError,
 	PublishHandle,
 	ReceivedPublication,
+	ShutdownError,
+	ShutdownHandle,
 	UpdateSubscriptionError,
 	UpdateSubscriptionHandle,
 };
