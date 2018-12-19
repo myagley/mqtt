@@ -376,14 +376,12 @@ impl UpdateSubscriptionHandle {
 #[derive(Clone, Copy, Debug)]
 pub enum UpdateSubscriptionError {
 	ClientDoesNotExist,
-	NotReady,
 }
 
 impl std::fmt::Display for UpdateSubscriptionError {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			UpdateSubscriptionError::ClientDoesNotExist => write!(f, "client does not exist"),
-			UpdateSubscriptionError::NotReady => write!(f, "too many subscription updates queued"),
 		}
 	}
 }

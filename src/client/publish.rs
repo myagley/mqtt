@@ -278,14 +278,12 @@ impl PublishHandle {
 #[derive(Debug)]
 pub enum PublishError {
 	ClientDoesNotExist,
-	NotReady(Publication),
 }
 
 impl std::fmt::Display for PublishError {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
 			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
-			PublishError::NotReady(_) => write!(f, "too many publish requests queued"),
 		}
 	}
 }
