@@ -29,7 +29,7 @@ impl<IoS> std::fmt::Debug for State<IoS> where IoS: super::IoSource {
 		clippy::unneeded_field_pattern, // Clippy wants wildcard pattern for Connected,
 		                                // which would silently allow fields to be added to the variant without adding them here
 	)]
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			State::BeginBackOff => f.write_str("BeginBackOff"),
 			State::EndBackOff(_) => f.write_str("EndBackOff"),

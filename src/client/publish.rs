@@ -281,7 +281,7 @@ pub enum PublishError {
 }
 
 impl std::fmt::Display for PublishError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
 		}

@@ -263,7 +263,7 @@ impl PacketIdentifier {
 }
 
 impl std::fmt::Display for PacketIdentifier {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		self.0.fmt(f)
 	}
 }
@@ -298,7 +298,7 @@ pub enum DecodeError {
 }
 
 impl std::fmt::Display for DecodeError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			DecodeError::IncompletePacket => write!(f, "packet is truncated"),
 			DecodeError::Io(err) => write!(f, "I/O error: {}", err),
@@ -320,7 +320,7 @@ impl std::fmt::Display for DecodeError {
 }
 
 impl std::error::Error for DecodeError {
-	fn source(&self) -> Option<&(std::error::Error + 'static)> {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		#[allow(clippy::match_same_arms)]
 		match self {
 			DecodeError::IncompletePacket => None,
@@ -364,7 +364,7 @@ impl EncodeError {
 }
 
 impl std::fmt::Display for EncodeError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			EncodeError::Io(err) => write!(f, "I/O error: {}", err),
 			EncodeError::KeepAliveTooHigh(keep_alive) => write!(f, "keep-alive {:?} is too high", keep_alive),
@@ -376,7 +376,7 @@ impl std::fmt::Display for EncodeError {
 }
 
 impl std::error::Error for EncodeError {
-	fn source(&self) -> Option<&(std::error::Error + 'static)> {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		#[allow(clippy::match_same_arms)]
 		match self {
 			EncodeError::Io(err) => Some(err),

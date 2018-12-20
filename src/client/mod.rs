@@ -549,7 +549,7 @@ impl PacketIdentifiers {
 }
 
 impl std::fmt::Debug for PacketIdentifiers {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("PacketIdentifiers").field("previous", &self.previous).finish()
 	}
 }
@@ -596,7 +596,7 @@ impl Error {
 }
 
 impl std::fmt::Display for Error {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Error::DecodePacket(err) =>
 				write!(f, "could not decode packet: {}", err),
@@ -639,7 +639,7 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-	fn source(&self) -> Option<&(std::error::Error + 'static)> {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		#[allow(clippy::match_same_arms)]
 		match self {
 			Error::DecodePacket(err) => Some(err),
@@ -658,7 +658,7 @@ impl std::error::Error for Error {
 }
 
 impl std::fmt::Display for UnexpectedSubUnsubAckReason {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			UnexpectedSubUnsubAckReason::DidNotExpect => write!(f, "did not expect it"),
 			UnexpectedSubUnsubAckReason::Expected(packet_identifier) => write!(f, "expected {}", packet_identifier),
@@ -674,7 +674,7 @@ pub enum ShutdownError {
 }
 
 impl std::fmt::Display for ShutdownError {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			ShutdownError::ClientDoesNotExist =>
 				write!(f, "client does not exist"),
