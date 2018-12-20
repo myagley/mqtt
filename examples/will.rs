@@ -100,8 +100,8 @@ fn main() {
 		})
 		.map_err(|err| panic!("couldn't update subscription: {}", err)));
 
-	let f = client.for_each(|publications| {
-		for publication in publications {
+	let f = client.for_each(|event| {
+		if let mqtt::Event::Publication(publication) = event {
 			match std::str::from_utf8(&publication.payload) {
 				Ok(s) =>
 					log::info!(
@@ -119,8 +119,9 @@ fn main() {
 					),
 			}
 		}
+
 		Ok(())
 	});
 
-	runtime.block_on(f).expect("subscriber failed");
+	runtime.block_on(f).expect("will failed");
 }

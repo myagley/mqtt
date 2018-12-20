@@ -19,6 +19,7 @@ mod client;
 pub use self::client::{
 	Client,
 	Error,
+	Event,
 	IoSource,
 	PublishError,
 	PublishHandle,
