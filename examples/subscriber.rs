@@ -44,7 +44,7 @@ struct Options {
 }
 
 fn main() {
-	env_logger::Builder::from_env("MQTT_LOG").init();
+	env_logger::Builder::from_env(env_logger::Env::new().filter_or("MQTT_LOG", "mqtt=debug,mqtt::logging=trace,subscriber=info")).init();
 
 	let Options {
 		server,
