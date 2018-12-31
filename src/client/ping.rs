@@ -11,12 +11,13 @@ impl State {
 		packet: &mut Option<crate::proto::Packet>,
 		keep_alive: std::time::Duration,
 	) -> futures::Poll<crate::proto::Packet, super::Error> {
-		match packet.take() {
-			Some(crate::proto::Packet::PingResp) => match self {
+		if let Some(crate::proto::Packet::PingResp) = packet {
+			let _ = packet.take();
+
+			match self {
 				State::BeginWaitingForNextPing => (),
 				State::WaitingForNextPing(ping_timer) => ping_timer.reset(deadline(std::time::Instant::now(), keep_alive)),
-			},
-			other => *packet = other,
+			}
 		}
 
 		loop {
