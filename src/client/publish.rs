@@ -236,6 +236,12 @@ impl State {
 		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| packet.clone()))
 	}
 
+	pub(super) fn publish(&mut self, publication: crate::proto::Publication) -> impl Future<Item = (), Error = PublishError> {
+		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
+		self.publish_requests_waiting_to_be_sent.push_back(PublishRequest { publication, ack_sender });
+		ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)
+	}
+
 	pub(super) fn publish_handle(&self) -> PublishHandle {
 		PublishHandle(self.publish_request_send.clone())
 	}

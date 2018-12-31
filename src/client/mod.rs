@@ -83,12 +83,47 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 		})
 	}
 
+	/// Queues a message to be published to the server
+	pub fn publish(&mut self, publication: crate::proto::Publication) -> impl Future<Item = (), Error = PublishError> {
+		match &mut self.0 {
+			ClientState::Up { publish, .. } => futures::future::Either::A(publish.publish(publication)),
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => futures::future::Either::B(futures::future::err(PublishError::ClientDoesNotExist)),
+		}
+	}
+
 	/// Returns a handle that can be used to publish messages to the server
 	pub fn publish_handle(&self) -> Result<PublishHandle, PublishError> {
 		match &self.0 {
 			ClientState::Up { publish, .. } => Ok(publish.publish_handle()),
 			ClientState::ShuttingDown { .. } |
 			ClientState::ShutDown { .. } => Err(PublishError::ClientDoesNotExist),
+		}
+	}
+
+	/// Subscribes to a topic with the given parameters
+	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> Result<(), UpdateSubscriptionError> {
+		match &mut self.0 {
+			ClientState::Up { subscriptions, .. } => {
+				subscriptions.update_subscription(subscriptions::SubscriptionUpdate::Subscribe(subscribe_to));
+				Ok(())
+			},
+
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => Err(UpdateSubscriptionError::ClientDoesNotExist),
+		}
+	}
+
+	/// Unsubscribes from the given topic
+	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> Result<(), UpdateSubscriptionError> {
+		match &mut self.0 {
+			ClientState::Up { subscriptions, .. } => {
+				subscriptions.update_subscription(subscriptions::SubscriptionUpdate::Unsubscribe(unsubscribe_from));
+				Ok(())
+			},
+
+			ClientState::ShuttingDown { .. } |
+			ClientState::ShutDown { .. } => Err(UpdateSubscriptionError::ClientDoesNotExist),
 		}
 	}
 

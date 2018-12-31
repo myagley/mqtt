@@ -295,6 +295,10 @@ impl State {
 		}
 	}
 
+	pub(super) fn update_subscription(&mut self, subscription_update: SubscriptionUpdate) {
+		self.subscription_updates_waiting_to_be_sent.push_back(subscription_update);
+	}
+
 	pub(super) fn update_subscription_handle(&self) -> UpdateSubscriptionHandle {
 		UpdateSubscriptionHandle(self.subscriptions_updated_send.clone())
 	}
@@ -318,7 +322,7 @@ impl Default for State {
 
 /// The kind of subscription update
 #[derive(Clone, Debug)]
-enum SubscriptionUpdate {
+pub(super) enum SubscriptionUpdate {
 	Subscribe(crate::proto::SubscribeTo),
 	Unsubscribe(String),
 }
