@@ -287,12 +287,16 @@ impl std::ops::AddAssign<u16> for PacketIdentifier {
 
 #[derive(Debug)]
 pub enum DecodeError {
+	ConnectReservedSet,
 	IncompletePacket,
 	Io(std::io::Error),
+	NoTopics,
 	RemainingLengthTooHigh,
 	StringNotUtf8(std::str::Utf8Error),
 	UnrecognizedConnAckFlags(u8),
 	UnrecognizedPacket { packet_type: u8, flags: u8, remaining_length: usize },
+	UnrecognizedProtocolLevel(u8),
+	UnrecognizedProtocolName(String),
 	UnrecognizedQoS(u8),
 	ZeroPacketIdentifier,
 }
@@ -300,8 +304,10 @@ pub enum DecodeError {
 impl std::fmt::Display for DecodeError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
+			DecodeError::ConnectReservedSet => write!(f, "the reserved byte of the CONNECT flags is set"),
 			DecodeError::IncompletePacket => write!(f, "packet is truncated"),
 			DecodeError::Io(err) => write!(f, "I/O error: {}", err),
+			DecodeError::NoTopics => write!(f, "expected at least one topic but there were none"),
 			DecodeError::RemainingLengthTooHigh => write!(f, "remaining length is too high to be decoded"),
 			DecodeError::StringNotUtf8(err) => err.fmt(f),
 			DecodeError::UnrecognizedConnAckFlags(flags) => write!(f, "could not parse CONNACK flags 0x{:02X}", flags),
@@ -313,6 +319,8 @@ impl std::fmt::Display for DecodeError {
 					flags,
 					remaining_length,
 				),
+			DecodeError::UnrecognizedProtocolLevel(level) => write!(f, "unexpected protocol level {:?}", level),
+			DecodeError::UnrecognizedProtocolName(name) => write!(f, "unexpected protocol name {:?}", name),
 			DecodeError::UnrecognizedQoS(qos) => write!(f, "could not parse QoS 0x{:02X}", qos),
 			DecodeError::ZeroPacketIdentifier => write!(f, "packet identifier is 0"),
 		}
@@ -323,12 +331,16 @@ impl std::error::Error for DecodeError {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		#[allow(clippy::match_same_arms)]
 		match self {
+			DecodeError::ConnectReservedSet => None,
 			DecodeError::IncompletePacket => None,
 			DecodeError::Io(err) => Some(err),
+			DecodeError::NoTopics => None,
 			DecodeError::RemainingLengthTooHigh => None,
 			DecodeError::StringNotUtf8(err) => Some(err),
 			DecodeError::UnrecognizedConnAckFlags(_) => None,
 			DecodeError::UnrecognizedPacket { .. } => None,
+			DecodeError::UnrecognizedProtocolLevel(_) => None,
+			DecodeError::UnrecognizedProtocolName(_) => None,
 			DecodeError::UnrecognizedQoS(_) => None,
 			DecodeError::ZeroPacketIdentifier => None,
 		}

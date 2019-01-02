@@ -152,9 +152,9 @@ pub enum QoS {
 impl From<QoS> for u8 {
 	fn from(qos: QoS) -> Self {
 		match qos {
-			QoS::AtMostOnce => 0,
-			QoS::AtLeastOnce => 1,
-			QoS::ExactlyOnce => 2,
+			QoS::AtMostOnce => 0x00,
+			QoS::AtLeastOnce => 0x01,
+			QoS::ExactlyOnce => 0x02,
 		}
 	}
 }
@@ -165,6 +165,15 @@ impl From<QoS> for u8 {
 pub enum SubAckQos {
 	Success(QoS),
 	Failure,
+}
+
+impl From<SubAckQos> for u8 {
+	fn from(qos: SubAckQos) -> Self {
+		match qos {
+			SubAckQos::Success(qos) => qos.into(),
+			SubAckQos::Failure => 0x80,
+		}
+	}
 }
 
 /// A message that can be published to the server
@@ -246,6 +255,94 @@ impl tokio::codec::Decoder for PacketCodec {
 					return_code,
 				}))
 			},
+
+			(Packet::CONNECT, 0, _) => {
+				let protocol_name = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
+				if protocol_name != "MQTT" {
+					return Err(super::DecodeError::UnrecognizedProtocolName(protocol_name));
+				}
+
+				let protocol_level = src.try_get_u8()?;
+				if protocol_level != 0x04 {
+					return Err(super::DecodeError::UnrecognizedProtocolLevel(protocol_level));
+				}
+
+				let connect_flags = src.try_get_u8()?;
+				if connect_flags & 0x01 != 0 {
+					return Err(super::DecodeError::ConnectReservedSet);
+				}
+
+				let keep_alive = std::time::Duration::from_secs(u64::from(src.try_get_u16_be()?));
+
+				let client_id = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
+				let client_id =
+					if client_id == "" {
+						super::ClientId::ServerGenerated
+					}
+					else if connect_flags & 0x02 == 0 {
+						super::ClientId::IdWithExistingSession(client_id)
+					}
+					else {
+						super::ClientId::IdWithCleanSession(client_id)
+					};
+
+				let will =
+					if connect_flags & 0x04 == 0 {
+						None
+					}
+					else {
+						let topic_name = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
+
+						let qos = match connect_flags & 0x18 {
+							0x00 => QoS::AtMostOnce,
+							0x08 => QoS::AtLeastOnce,
+							0x10 => QoS::ExactlyOnce,
+							qos => return Err(super::DecodeError::UnrecognizedQoS(qos >> 3)),
+						};
+
+						let retain = connect_flags & 0x20 != 0;
+
+						let payload_len = src.try_get_u16_be()?;
+						let payload = (&*src.split_to(usize::from(payload_len))).to_owned();
+
+						Some(Publication {
+							topic_name,
+							qos,
+							retain,
+							payload,
+						})
+					};
+
+				let username =
+					if connect_flags & 0x80 == 0 {
+						None
+					}
+					else {
+						Some(super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?)
+					};
+
+				let password =
+					if connect_flags & 0x40 == 0 {
+						None
+					}
+					else {
+						Some(super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?)
+					};
+
+				Ok(Some(Packet::Connect {
+					username,
+					password,
+					will,
+					client_id,
+					keep_alive,
+				}))
+			},
+
+			(Packet::DISCONNECT, 0, 0) =>
+				Ok(Some(Packet::Disconnect)),
+
+			(Packet::PINGREQ, 0, 0) =>
+				Ok(Some(Packet::PingReq)),
 
 			(Packet::PINGRESP, 0, 0) =>
 				Ok(Some(Packet::PingResp)),
@@ -363,6 +460,36 @@ impl tokio::codec::Decoder for PacketCodec {
 				}))
 			},
 
+			(Packet::SUBSCRIBE, 2, _) => {
+				let packet_identifier = src.try_get_u16_be()?;
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
+					Some(packet_identifier) => packet_identifier,
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
+				};
+
+				let mut subscribe_to = vec![];
+
+				while !src.is_empty() {
+					let topic_filter = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
+					let qos = match src.try_get_u8()? {
+						0x00 => QoS::AtMostOnce,
+						0x01 => QoS::AtLeastOnce,
+						0x02 => QoS::ExactlyOnce,
+						qos => return Err(super::DecodeError::UnrecognizedQoS(qos)),
+					};
+					subscribe_to.push(SubscribeTo { topic_filter, qos });
+				}
+
+				if subscribe_to.is_empty() {
+					return Err(super::DecodeError::NoTopics);
+				}
+
+				Ok(Some(Packet::Subscribe {
+					packet_identifier,
+					subscribe_to,
+				}))
+			},
+
 			(Packet::UNSUBACK, 0, 2) => {
 				let packet_identifier = src.try_get_u16_be()?;
 				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
@@ -372,6 +499,29 @@ impl tokio::codec::Decoder for PacketCodec {
 
 				Ok(Some(Packet::UnsubAck {
 					packet_identifier,
+				}))
+			},
+
+			(Packet::UNSUBSCRIBE, 2, _) => {
+				let packet_identifier = src.try_get_u16_be()?;
+				let packet_identifier = match super::PacketIdentifier::new(packet_identifier) {
+					Some(packet_identifier) => packet_identifier,
+					None => return Err(super::DecodeError::ZeroPacketIdentifier),
+				};
+
+				let mut unsubscribe_from = vec![];
+
+				while !src.is_empty() {
+					unsubscribe_from.push(super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?);
+				}
+
+				if unsubscribe_from.is_empty() {
+					return Err(super::DecodeError::NoTopics);
+				}
+
+				Ok(Some(Packet::Unsubscribe {
+					packet_identifier,
+					unsubscribe_from,
 				}))
 			},
 
@@ -389,11 +539,24 @@ impl tokio::codec::Encoder for PacketCodec {
 		dst.reserve(std::mem::size_of::<u8>() + 4 * std::mem::size_of::<u8>());
 
 		match item {
-			Packet::ConnAck { .. } => unimplemented!(),
+			Packet::ConnAck { session_present, return_code } => encode_packet(dst, Packet::CONNACK, |dst| {
+				if session_present {
+					dst.append_u8(0x01);
+				}
+				else {
+					dst.append_u8(0x00);
+				}
+
+				dst.append_u8(return_code.into());
+
+				Ok(())
+			})?,
 
 			Packet::Connect { username, password, will, client_id, keep_alive } => encode_packet(dst, Packet::CONNECT, |dst| {
-				dst.extend_from_slice(b"\x00\x04MQTT");
+				super::Utf8StringCodec::default().encode("MQTT".to_string(), dst)?;
+
 				dst.append_u8(0x04_u8);
+
 				{
 					let mut connect_flags = 0x00_u8;
 					if username.is_some() {
@@ -415,9 +578,7 @@ impl tokio::codec::Encoder for PacketCodec {
 					}
 					match client_id {
 						super::ClientId::ServerGenerated |
-						super::ClientId::IdWithCleanSession(_) => {
-							connect_flags |= 0x02;
-						},
+						super::ClientId::IdWithCleanSession(_) => connect_flags |= 0x02,
 						super::ClientId::IdWithExistingSession(_) => (),
 					}
 					dst.append_u8(connect_flags);
@@ -464,7 +625,7 @@ impl tokio::codec::Encoder for PacketCodec {
 
 			Packet::PingReq => encode_packet(dst, Packet::PINGREQ, |_| Ok(()))?,
 
-			Packet::PingResp => unimplemented!(),
+			Packet::PingResp => encode_packet(dst, Packet::PINGRESP, |_| Ok(()))?,
 
 			Packet::PubAck { packet_identifier } => encode_packet(dst, Packet::PUBACK, |dst| {
 				dst.append_packet_identifier(packet_identifier);
@@ -515,7 +676,15 @@ impl tokio::codec::Encoder for PacketCodec {
 				Ok(())
 			})?,
 
-			Packet::SubAck { .. } => unimplemented!(),
+			Packet::SubAck { packet_identifier, qos } => encode_packet(dst, Packet::SUBACK, |dst| {
+				dst.append_packet_identifier(packet_identifier);
+
+				for qos in qos {
+					dst.append_u8(qos.into());
+				}
+
+				Ok(())
+			})?,
 
 			Packet::Subscribe { packet_identifier, subscribe_to } => encode_packet(dst, Packet::SUBSCRIBE | 0x02, |dst| {
 				dst.append_packet_identifier(packet_identifier);
@@ -528,7 +697,10 @@ impl tokio::codec::Encoder for PacketCodec {
 				Ok(())
 			})?,
 
-			Packet::UnsubAck { .. } => unimplemented!(),
+			Packet::UnsubAck { packet_identifier } => encode_packet(dst, Packet::SUBACK, |dst| {
+				dst.append_packet_identifier(packet_identifier);
+				Ok(())
+			})?,
 
 			Packet::Unsubscribe { packet_identifier, unsubscribe_from } => encode_packet(dst, Packet::UNSUBSCRIBE | 0x02, |dst| {
 				dst.append_packet_identifier(packet_identifier);
