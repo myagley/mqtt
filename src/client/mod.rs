@@ -224,15 +224,17 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 							else {
 								log::warn!("client will reconnect because of error: {}", err);
 
-								// Ensure clean session
-								//
-								// DEVNOTE: subscriptions::State relies on the fact that the session is reset here.
-								// Update that if this ever changes.
-								*client_id = match std::mem::replace(client_id, crate::proto::ClientId::ServerGenerated) {
-									id @ crate::proto::ClientId::ServerGenerated |
-									id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
-									crate::proto::ClientId::IdWithExistingSession(id) => crate::proto::ClientId::IdWithCleanSession(id),
-								};
+								if !err.session_is_resumable() {
+									// Ensure clean session if the error is such that the session is not resumable.
+									//
+									// DEVNOTE: subscriptions::State relies on the fact that the session is reset here.
+									// Update that if this ever changes.
+									*client_id = match std::mem::replace(client_id, crate::proto::ClientId::ServerGenerated) {
+										id @ crate::proto::ClientId::ServerGenerated |
+										id @ crate::proto::ClientId::IdWithCleanSession(_) => id,
+										crate::proto::ClientId::IdWithExistingSession(id) => crate::proto::ClientId::IdWithCleanSession(id),
+									};
+								}
 
 								connect.reconnect();
 							},
@@ -625,6 +627,14 @@ impl Error {
 	fn is_user_error(&self) -> bool {
 		match self {
 			Error::EncodePacket(err) => err.is_user_error(),
+			_ => false,
+		}
+	}
+
+	fn session_is_resumable(&self) -> bool {
+		match self {
+			Error::DecodePacket(crate::proto::DecodeError::Io(err)) => err.kind() == std::io::ErrorKind::TimedOut,
+			Error::ServerClosedConnection => true,
 			_ => false,
 		}
 	}
