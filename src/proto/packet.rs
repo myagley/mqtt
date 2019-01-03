@@ -702,7 +702,7 @@ impl tokio::codec::Encoder for PacketCodec {
 				Ok(())
 			})?,
 
-			Packet::UnsubAck { packet_identifier } => encode_packet(dst, Packet::SUBACK, |dst| {
+			Packet::UnsubAck { packet_identifier } => encode_packet(dst, Packet::UNSUBACK, |dst| {
 				dst.append_packet_identifier(packet_identifier);
 				Ok(())
 			})?,
