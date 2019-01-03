@@ -381,6 +381,8 @@ impl tokio::codec::Decoder for PacketCodec {
 				let topic_name = super::Utf8StringCodec::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
 
 				let packet_identifier_dup_qos = match (flags & 0x06) >> 1 {
+					0x00 if dup => return Err(super::DecodeError::PublishDupAtMostOnce),
+
 					0x00 => PacketIdentifierDupQoS::AtMostOnce,
 
 					0x01 => {
