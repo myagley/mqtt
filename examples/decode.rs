@@ -1,4 +1,8 @@
-/// Parses the given file as an MQTT packet and prints it to stdout
+/// Parses the given file as an MQTT packet and prints it to stdout.
+///
+/// Also checks that a successfully parsed packet can be encoded and re-decoded successfully.
+///
+/// Primarily meant to be used to investigate mqtt-fuzz crashes.
 ///
 /// Example:
 ///
@@ -6,7 +10,7 @@
 
 use std::io::Read;
 
-use tokio::codec::Decoder;
+use tokio::codec::{ Decoder, Encoder };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let filename = std::env::args_os().nth(1).ok_or("expected one argument set to the name of the file to decode")?;
@@ -15,17 +19,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let mut codec: mqtt::proto::PacketCodec = Default::default();
 
-	let mut bytes = vec![];
-	file.read_to_end(&mut bytes)?;
-	let mut bytes: bytes::BytesMut = bytes.into();
+	let mut data = vec![];
+	file.read_to_end(&mut data)?;
+	let mut bytes: bytes::BytesMut = (&*data).into();
 
 	let packet = codec.decode(&mut bytes)?.ok_or("incomplete packet")?;
+	println!("{:#?}", packet);
+
+	let mut bytes = bytes::BytesMut::new();
+	codec.encode(packet.clone(), &mut bytes)?;
+	let packet2 = codec.decode(&mut bytes)?.ok_or("could not decode re-encoded packet")?;
+	assert_eq!(packet, packet2);
 
 	if !bytes.is_empty() {
 		return Err("leftover bytes".into());
 	}
-
-	println!("{:#?}", packet);
 
 	Ok(())
 }
