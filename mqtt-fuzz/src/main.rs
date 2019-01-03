@@ -14,7 +14,7 @@ fn main() {
 			// We do this rather than just encoding the parsed packet and comparing the raw bytes
 			// because there is variance in the representation of "remaining lengths"
 			//
-			// So the fuzzer can generate a remaining length like `0xF0 0x01` which would get re-encoded as `0x01`
+			// So the fuzzer can generate a remaining length like `0x81 0x00` which would get re-encoded as `0x01`
 			// and not match the input.
 
 			let mut bytes = bytes::BytesMut::new();
