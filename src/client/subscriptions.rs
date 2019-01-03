@@ -239,13 +239,14 @@ impl State {
 			}
 
 			// Generate a SUBSCRIBE packet for the final set of subscriptions
-			let subscriptions_waiting_to_be_acked: Vec<_> =
+			let mut subscriptions_waiting_to_be_acked: Vec<_> =
 				subscriptions.into_iter()
 				.map(|(topic_filter, qos)| crate::proto::SubscribeTo {
 					topic_filter,
 					qos,
 				})
 				.collect();
+			subscriptions_waiting_to_be_acked.sort_by(|subscribe_to1, subscribe_to2| subscribe_to1.topic_filter.cmp(&subscribe_to2.topic_filter));
 
 			if subscriptions_waiting_to_be_acked.is_empty() {
 				NewConnectionIter::Empty
