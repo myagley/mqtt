@@ -21,7 +21,7 @@ pub use self::packet::{
 /// Refs:
 /// - 3.1.3.1 Client Identifier
 /// - 3.1.2.4 Clean Session
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientId {
 	ServerGenerated,
 	IdWithCleanSession(String),
@@ -31,7 +31,7 @@ pub enum ClientId {
 /// The return code for a connection attempt
 ///
 /// Ref: 3.2.2.3 Connect Return code
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectReturnCode {
 	Accepted,
 	Refused(ConnectionRefusedReason),
@@ -40,7 +40,7 @@ pub enum ConnectReturnCode {
 /// The reason the connection was refused by the server
 ///
 /// Ref: 3.2.2.3 Connect Return code
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionRefusedReason {
 	UnacceptableProtocolVersion,
 	IdentifierRejected,

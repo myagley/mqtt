@@ -1,7 +1,7 @@
 use super::BufMutExt;
 
 /// An MQTT packet
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Packet {
 	/// Ref: 3.2 CONNACK – Acknowledge connection request
 	ConnAck {
@@ -125,7 +125,7 @@ impl Packet {
 #[allow(clippy::doc_markdown)]
 /// A combination of the packet identifier, dup flag and QoS that only allows valid combinations of these three properties.
 /// Used in [`Packet::Publish`]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketIdentifierDupQoS {
 	AtMostOnce,
 	AtLeastOnce(super::PacketIdentifier, bool),
@@ -133,7 +133,7 @@ pub enum PacketIdentifierDupQoS {
 }
 
 /// A subscription request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscribeTo {
 	pub topic_filter: String,
 	pub qos: QoS,
@@ -161,7 +161,7 @@ impl From<QoS> for u8 {
 
 #[allow(clippy::doc_markdown)]
 /// QoS returned in a SUBACK packet. Either one of the [`QoS`] values, or an error code.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubAckQos {
 	Success(QoS),
 	Failure,
@@ -177,7 +177,7 @@ impl From<SubAckQos> for u8 {
 }
 
 /// A message that can be published to the server
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Publication {
 	pub topic_name: String,
 	pub qos: crate::proto::QoS,
