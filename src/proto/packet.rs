@@ -302,8 +302,11 @@ impl tokio::codec::Decoder for PacketCodec {
 
 						let retain = connect_flags & 0x20 != 0;
 
-						let payload_len = src.try_get_u16_be()?;
-						let payload = (&*src.split_to(usize::from(payload_len))).to_owned();
+						let payload_len = usize::from(src.try_get_u16_be()?);
+						if src.len() < payload_len {
+							return Err(super::DecodeError::IncompletePacket);
+						}
+						let payload = (&*src.split_to(payload_len)).to_owned();
 
 						Some(Publication {
 							topic_name,
