@@ -540,18 +540,20 @@ where
 }
 
 struct PacketIdentifiers {
-	in_use: Box<[u64; PacketIdentifiers::SIZE]>,
+	in_use: Box<[usize; PacketIdentifiers::SIZE]>,
 	previous: crate::proto::PacketIdentifier,
 }
 
 impl PacketIdentifiers {
 	/// Size of a bitset for every packet identifier
 	///
-	/// Packet identifiers are u16's, and there are 64 bits to a u64, so the number of u64's required
-	/// = number of u16's / 64
-	/// = pow(2, number of bits in a u16) / 64
-	/// = pow(2, 16) / 64
-	const SIZE: usize = 1024;
+	/// Packet identifiers are u16's, so the number of usize's required
+	/// = number of u16's / number of bits in a usize
+	/// = pow(2, number of bits in a u16) / number of bits in a usize
+	/// = pow(2, 16) / (size_of::<usize>() * 8)
+	///
+	/// We use a bitshift instead of usize::pow because the latter is not a const fn
+	const SIZE: usize = (1 << 16) / (std::mem::size_of::<usize>() * 8);
 
 	fn reserve(&mut self) -> Result<crate::proto::PacketIdentifier, Error> {
 		let start = self.previous;
@@ -578,9 +580,9 @@ impl PacketIdentifiers {
 		*block &= !mask;
 	}
 
-	fn entry(&mut self, packet_identifier: crate::proto::PacketIdentifier) -> (&mut u64, u64) {
-		let packet_identifier = packet_identifier.get();
-		let (block, offset) = ((packet_identifier / 64) as usize, (packet_identifier % 64) as usize);
+	fn entry(&mut self, packet_identifier: crate::proto::PacketIdentifier) -> (&mut usize, usize) {
+		let packet_identifier = usize::from(packet_identifier.get());
+		let (block, offset) = (packet_identifier / (std::mem::size_of::<usize>() * 8), packet_identifier % (std::mem::size_of::<usize>() * 8));
 		(&mut self.in_use[block], 1 << offset)
 	}
 }
@@ -728,4 +730,87 @@ impl std::fmt::Display for ShutdownError {
 }
 
 impl std::error::Error for ShutdownError {
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn packet_identifiers() {
+		#[cfg(target_pointer_width = "32")]
+		assert_eq!(PacketIdentifiers::SIZE, 2048);
+		#[cfg(target_pointer_width = "64")]
+		assert_eq!(PacketIdentifiers::SIZE, 1024);
+
+		let mut packet_identifiers: PacketIdentifiers = Default::default();
+		assert_eq!(packet_identifiers.in_use[..], Box::new([0; PacketIdentifiers::SIZE])[..]);
+
+		assert_eq!(packet_identifiers.reserve().unwrap().get(), 1);
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = 1 << 1;
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		assert_eq!(packet_identifiers.reserve().unwrap().get(), 2);
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = (1 << 1) | (1 << 2);
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		assert_eq!(packet_identifiers.reserve().unwrap().get(), 3);
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = (1 << 1) | (1 << 2) | (1 << 3);
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		packet_identifiers.discard(crate::proto::PacketIdentifier::new(2).unwrap());
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = (1 << 1) | (1 << 3);
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		assert_eq!(packet_identifiers.reserve().unwrap().get(), 4);
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = (1 << 1) | (1 << 3) | (1 << 4);
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		packet_identifiers.discard(crate::proto::PacketIdentifier::new(1).unwrap());
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = (1 << 3) | (1 << 4);
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		packet_identifiers.discard(crate::proto::PacketIdentifier::new(3).unwrap());
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = 1 << 4;
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		packet_identifiers.discard(crate::proto::PacketIdentifier::new(4).unwrap());
+		assert_eq!(packet_identifiers.in_use[..], Box::new([0; PacketIdentifiers::SIZE])[..]);
+
+		assert_eq!(packet_identifiers.reserve().unwrap().get(), 5);
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		expected[0] = 1 << 5;
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		let goes_in_next_block = std::mem::size_of::<usize>() * 8;
+		#[allow(clippy::cast_possible_truncation)]
+		for i in 6..=goes_in_next_block {
+			assert_eq!(packet_identifiers.reserve().unwrap().get(), i as u16);
+		}
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		#[allow(clippy::identity_op)]
+		{
+			expected[0] = usize::max_value() - (1 << 0) - (1 << 1) - (1 << 2) - (1 << 3) - (1 << 4);
+			expected[1] |= 1 << 0;
+		}
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+
+		#[allow(clippy::cast_possible_truncation, clippy::range_minus_one)]
+		for i in 5..=(goes_in_next_block - 1) {
+			packet_identifiers.discard(crate::proto::PacketIdentifier::new(i as u16).unwrap());
+		}
+		let mut expected = Box::new([0; PacketIdentifiers::SIZE]);
+		#[allow(clippy::identity_op)]
+		{
+			expected[1] |= 1 << 0;
+		}
+		assert_eq!(packet_identifiers.in_use[..], expected[..]);
+	}
 }
