@@ -559,20 +559,16 @@ impl PacketIdentifiers {
 		let start = self.previous;
 		let mut current = start;
 
-		loop {
-			current += 1;
+		current += 1;
 
-			let (block, mask) = self.entry(current);
-			if (*block & mask) == 0 {
-				*block |= mask;
-				self.previous = current;
-				return Ok(current);
-			}
-
-			if current == start {
-				return Err(Error::PacketIdentifiersExhausted);
-			}
+		let (block, mask) = self.entry(current);
+		if (*block & mask) != 0 {
+			return Err(Error::PacketIdentifiersExhausted);
 		}
+
+		*block |= mask;
+		self.previous = current;
+		Ok(current)
 	}
 
 	fn discard(&mut self, packet_identifier: crate::proto::PacketIdentifier) {
