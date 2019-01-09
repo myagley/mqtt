@@ -1,5 +1,3 @@
-use futures::Stream;
-
 mod common;
 
 #[test]
@@ -96,7 +94,11 @@ fn server_generated_id_must_always_resubscribe() {
 	client.subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }).unwrap();
 	client.subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }).unwrap();
 
-	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(|_| Ok(())));
+	common::verify_client_events(&mut runtime, client, vec![
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: false },
+	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
 }
@@ -217,7 +219,11 @@ fn client_id_should_not_resubscribe_when_session_is_present() {
 	client.subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }).unwrap();
 	client.subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }).unwrap();
 
-	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(|_| Ok(())));
+	common::verify_client_events(&mut runtime, client, vec![
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: false },
+	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
 }
@@ -279,7 +285,9 @@ fn should_combine_pending_subscription_updates() {
 	client.subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }).unwrap();
 	client.unsubscribe("topic2".to_string()).unwrap();
 
-	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(|_| Ok(())));
+	common::verify_client_events(&mut runtime, client, vec![
+		mqtt::Event::NewConnection { reset_session: true },
+	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
 }

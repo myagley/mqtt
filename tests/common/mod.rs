@@ -1,4 +1,17 @@
-use futures::Future;
+use futures::{ Future, Stream };
+
+pub(crate) fn verify_client_events(
+	runtime: &mut tokio::runtime::current_thread::Runtime,
+	client: mqtt::Client<IoSource>,
+	expected: Vec<mqtt::Event>,
+) {
+	let mut expected = expected.into_iter();
+
+	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(move |event| {
+		assert_eq!(expected.next(), Some(event));
+		Ok(())
+	}));
+}
 
 /// An `mqtt::IoSource` impl suitable for use with an `mqtt::Client`. The IoSource pretends to provide connections
 /// to a real MQTT server.

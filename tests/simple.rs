@@ -1,5 +1,3 @@
-use futures::Stream;
-
 mod common;
 
 #[test]
@@ -65,7 +63,10 @@ fn server_generated_id_can_connect_and_idle() {
 			std::time::Duration::from_secs(4),
 		);
 
-	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(|_| Ok(())));
+	common::verify_client_events(&mut runtime, client, vec![
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: true },
+	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
 }
@@ -159,7 +160,11 @@ fn client_id_can_connect_and_idle() {
 			std::time::Duration::from_secs(4),
 		);
 
-	runtime.spawn(client.map_err(|err| panic!("{:?}", err)).for_each(|_| Ok(())));
+	common::verify_client_events(&mut runtime, client, vec![
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::NewConnection { reset_session: false },
+	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
 }
