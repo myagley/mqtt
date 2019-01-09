@@ -16,7 +16,9 @@ impl State {
 		&mut self,
 		packet: &mut Option<crate::proto::Packet>,
 		packet_identifiers: &mut super::PacketIdentifiers,
-	) -> Result<Vec<crate::proto::Packet>, super::Error> {
+	) -> Result<(Vec<crate::proto::Packet>, Vec<SubscriptionUpdate>), super::Error> {
+		let mut subscription_updates = vec![];
+
 		match packet.take() {
 			Some(crate::proto::Packet::SubAck { packet_identifier, qos }) => match self.subscription_updates_waiting_to_be_acked.pop_front() {
 				Some((packet_identifier_waiting_to_be_acked, BatchedSubscriptionUpdate::Subscribe(subscribe_to))) => {
@@ -53,7 +55,8 @@ impl State {
 							crate::proto::SubAckQos::Success(actual_qos) =>
 								if actual_qos >= expected_qos {
 									log::debug!("Subscribed to {} with {:?}", topic_filter, actual_qos);
-									self.subscriptions.insert(topic_filter, actual_qos);
+									self.subscriptions.insert(topic_filter.clone(), actual_qos);
+									subscription_updates.push(SubscriptionUpdate::Subscribe(crate::proto::SubscribeTo { topic_filter, qos: actual_qos }));
 								}
 								else {
 									if err.is_none() {
@@ -108,6 +111,7 @@ impl State {
 					for topic_filter in unsubscribe_from {
 						log::debug!("Unsubscribed from {}", topic_filter);
 						self.subscriptions.remove(&topic_filter);
+						subscription_updates.push(SubscriptionUpdate::Unsubscribe(topic_filter));
 					}
 				},
 
@@ -239,7 +243,7 @@ impl State {
 			}
 		}
 
-		Ok(packets_waiting_to_be_sent)
+		Ok((packets_waiting_to_be_sent, subscription_updates))
 	}
 
 	pub(super) fn new_connection(
@@ -354,8 +358,8 @@ impl Default for State {
 }
 
 /// The kind of subscription update
-#[derive(Clone, Debug)]
-pub(super) enum SubscriptionUpdate {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubscriptionUpdate {
 	Subscribe(crate::proto::SubscribeTo),
 	Unsubscribe(String),
 }
@@ -389,7 +393,22 @@ impl Iterator for NewConnectionIter {
 pub struct UpdateSubscriptionHandle(futures::sync::mpsc::Sender<SubscriptionUpdate>);
 
 impl UpdateSubscriptionHandle {
-	/// Subscribe to a topic with the given parameters
+	/// Subscribe to a topic with the given parameters.
+	///
+	/// The [`Future`] returned by this function resolves when the subscription update is received by the client.
+	/// The client has *not necessarily* sent out the subscription update to the server at that point,
+	/// and the server has *not necessarily* acked the subscription update at that point.
+	///
+	/// This is done because the client automatically resubscribes when the connection is broken and re-established, so the user
+	/// of the client needs to know about this every time the server acks the subscription, not just the first time they request it.
+	///
+	/// Furthermore, the client batches subscription updates, which can cause some subscription updates to never be sent (say because a subscription
+	/// was canceled out by a matching unsubscription before the subscription was ever sent to the server). So there is not a one-to-one correspondence
+	/// between subscription update requests and acks.
+	///
+	/// To know when the server has acked the subscription update, wait for the client to send an [`mqtt::Event::SubscriptionUpdate::Subscribe`] value
+	/// that contains a `mqtt::proto::SubscribeTo` value with the same topic filter.
+	/// Be careful about using `==` to determine this, since the QoS in the event may be higher than the one requested here.
 	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
 		self.0.clone()
 			.send(SubscriptionUpdate::Subscribe(subscribe_to))
@@ -399,7 +418,21 @@ impl UpdateSubscriptionHandle {
 			})
 	}
 
-	/// Unsubscribe from the given topic
+	/// Unsubscribe from the given topic.
+	///
+	/// The [`Future`] returned by this function resolves when the subscription update is received by the client.
+	/// The client has *not necessarily* sent out the subscription update to the server at that point,
+	/// and the server has *not necessarily* acked the subscription update at that point.
+	///
+	/// This is done because the client automatically resubscribes when the connection is broken and re-established, so the user
+	/// of the client needs to know about this every time the server acks the subscription, not just the first time they request it.
+	///
+	/// Furthermore, the client batches subscription updates, which can cause some subscription updates to never be sent (say because a subscription
+	/// was canceled out by a matching unsubscription before the subscription was ever sent to the server). So there is not a one-to-one correspondence
+	/// between subscription update requests and acks.
+	///
+	/// To know when the server has acked the subscription update, wait for the client to send an [`mqtt::Event::SubscriptionUpdate::Unsubscribe`] value
+	/// for this topic filter.
 	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> impl Future<Item = (), Error = UpdateSubscriptionError> {
 		self.0.clone()
 			.send(SubscriptionUpdate::Unsubscribe(unsubscribe_from))

@@ -26,6 +26,7 @@ pub use self::client::{
 	ReceivedPublication,
 	ShutdownError,
 	ShutdownHandle,
+	SubscriptionUpdate,
 	UpdateSubscriptionError,
 	UpdateSubscriptionHandle,
 };

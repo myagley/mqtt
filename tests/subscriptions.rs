@@ -96,8 +96,23 @@ fn server_generated_id_must_always_resubscribe() {
 
 	common::verify_client_events(&mut runtime, client, vec![
 		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 		mqtt::Event::NewConnection { reset_session: false },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
@@ -221,7 +236,17 @@ fn client_id_should_not_resubscribe_when_session_is_present() {
 
 	common::verify_client_events(&mut runtime, client, vec![
 		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 		mqtt::Event::NewConnection { reset_session: false },
 	]);
 
@@ -287,6 +312,10 @@ fn should_combine_pending_subscription_updates() {
 
 	common::verify_client_events(&mut runtime, client, vec![
 		mqtt::Event::NewConnection { reset_session: true },
+		mqtt::Event::SubscriptionUpdates(vec![
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtLeastOnce }),
+			mqtt::SubscriptionUpdate::Subscribe(mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce }),
+		]),
 	]);
 
 	runtime.block_on(done).expect("connection broken while there were still steps remaining on the server");
