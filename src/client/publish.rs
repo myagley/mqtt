@@ -55,12 +55,13 @@ impl State {
 				None => log::warn!("ignoring PUBCOMP for a PUBREL we never sent"),
 			},
 
-			Some(crate::proto::Packet::Publish { packet_identifier_dup_qos, topic_name, payload, .. }) => match packet_identifier_dup_qos {
+			Some(crate::proto::Packet::Publish { packet_identifier_dup_qos, retain, topic_name, payload }) => match packet_identifier_dup_qos {
 				crate::proto::PacketIdentifierDupQoS::AtMostOnce => {
 					publication_received = Some(crate::ReceivedPublication {
 						topic_name,
 						dup: false,
 						qos: crate::proto::QoS::AtMostOnce,
+						retain,
 						payload,
 					});
 				},
@@ -70,6 +71,7 @@ impl State {
 						topic_name,
 						dup,
 						qos: crate::proto::QoS::AtLeastOnce,
+						retain,
 						payload,
 					});
 
@@ -94,6 +96,7 @@ impl State {
 								topic_name,
 								dup,
 								qos: crate::proto::QoS::ExactlyOnce,
+								retain,
 								payload,
 							});
 						},

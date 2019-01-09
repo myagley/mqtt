@@ -393,6 +393,7 @@ pub struct ReceivedPublication {
 	pub topic_name: String,
 	pub dup: bool,
 	pub qos: crate::proto::QoS,
+	pub retain: bool,
 	pub payload: Vec<u8>,
 }
 
