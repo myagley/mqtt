@@ -132,78 +132,110 @@ impl State {
 		}
 
 
-		// Rather than send individual SUBSCRIBE and UNSUBSCRIBE packets for each update, we can send multiple updates in the same packet.
-		// subscription_updates_waiting_to_be_sent may contain Subscribe and Unsubscribe in arbitrary order, so we have to partition them into
-		// a group of Subscribe and a group of Unsubscribe.
-		//
-		// But the client have have unsubscribed to an earlier subscription, and both the Subscribe and the later Unsubscribe might be in this list.
-		// Similarly, the client have have re-subscribed after unsubscribing, and both the Unsubscribe and the later Subscribe might be in this list.
-		//
-		// So we cannot just make a group of all Subscribes, send that packet, then make a group of all Unsubscribes, then send that packet.
-		// Instead, we have to respect the ordering of Subscribes with Unsubscribes.
-		// So we make groups of *consecutive* Subscribes and *consecutive* Unsubscribes, and construct one packet for each such group.
-
 		let mut packets_waiting_to_be_sent = vec![];
 
-		while let Some(subscription_update) = self.subscription_updates_waiting_to_be_sent.pop_front() {
-			let packet_identifier = match packet_identifiers.reserve() {
-				Ok(packet_identifier) => packet_identifier,
-				Err(err) => {
-					self.subscription_updates_waiting_to_be_sent.push_front(subscription_update);
+		if !self.subscription_updates_waiting_to_be_sent.is_empty() {
+			// Rather than send individual SUBSCRIBE and UNSUBSCRIBE packets for each update, we can send multiple updates in the same packet.
+			// subscription_updates_waiting_to_be_sent may contain Subscribe and Unsubscribe in arbitrary order, so we have to partition them into
+			// a group of Subscribe and a group of Unsubscribe.
+			//
+			// But the client have have unsubscribed to an earlier subscription, and both the Subscribe and the later Unsubscribe might be in this list.
+			// Similarly, the client have have re-subscribed after unsubscribing, and both the Unsubscribe and the later Subscribe might be in this list.
+			//
+			// So we cannot just make a group of all Subscribes, send that packet, then make a group of all Unsubscribes, then send that packet.
+			// Instead, we have to respect the ordering of Subscribes with Unsubscribes.
+			// So we make an intermediate set of all subscriptions based on the updates waiting to be sent, compute the diff from the current subscriptions,
+			// then send a SUBSCRIBE packet for any net new subscriptions and an UNSUBSCRIBE packet for any net new unsubscriptions.
+
+			let mut target_subscriptions = self.subscriptions.clone();
+
+			while let Some(subscription_update) = self.subscription_updates_waiting_to_be_sent.pop_front() {
+				match subscription_update {
+					SubscriptionUpdate::Subscribe(subscribe_to) =>
+						target_subscriptions.insert(subscribe_to.topic_filter, subscribe_to.qos),
+					SubscriptionUpdate::Unsubscribe(unsubscribe_from) =>
+						target_subscriptions.remove(&unsubscribe_from),
+				};
+			}
+
+			let mut pending_subscriptions = vec![];
+			for (topic_filter, &qos) in &target_subscriptions {
+				if self.subscriptions.get(topic_filter) != Some(&qos) {
+					// Current subscription doesn't exist, or exists but has different QoS
+					pending_subscriptions.push(crate::proto::SubscribeTo {
+						topic_filter: topic_filter.clone(),
+						qos,
+					});
+				}
+			}
+			pending_subscriptions.sort_by(|s1, s2| s1.topic_filter.cmp(&s2.topic_filter));
+
+			let mut pending_unsubscriptions = vec![];
+			for topic_filter in self.subscriptions.keys() {
+				if !target_subscriptions.contains_key(topic_filter) {
+					pending_unsubscriptions.push(topic_filter.clone());
+				}
+			}
+			pending_unsubscriptions.sort();
+
+			// Save the error, if any, from reserving a packet identifier
+			// This error is only returned if neither subscription nor unsubscription generated a packet to send
+			// This avoids having to discard a valid packet identifier for a SUBSCRIBE packet just because
+			// the unsubscription failed to reserve a packet identifier for an UNSUBSCRIBE packet.
+			let mut err = None;
+
+			if !pending_subscriptions.is_empty() {
+				match packet_identifiers.reserve() {
+					Ok(packet_identifier) => {
+						self.subscription_updates_waiting_to_be_acked.push_back((
+							packet_identifier,
+							BatchedSubscriptionUpdate::Subscribe(pending_subscriptions.clone()),
+						));
+
+						packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe {
+							packet_identifier,
+							subscribe_to: pending_subscriptions,
+						});
+					},
+
+					Err(err_) => {
+						err = Some(err_);
+
+						for pending_subscription in pending_subscriptions {
+							self.subscription_updates_waiting_to_be_sent.push_front(SubscriptionUpdate::Subscribe(pending_subscription));
+						}
+					},
+				};
+			}
+
+			if !pending_unsubscriptions.is_empty() {
+				match packet_identifiers.reserve() {
+					Ok(packet_identifier) => {
+						self.subscription_updates_waiting_to_be_acked.push_back((
+							packet_identifier,
+							BatchedSubscriptionUpdate::Unsubscribe(pending_unsubscriptions.clone()),
+						));
+
+						packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe {
+							packet_identifier,
+							unsubscribe_from: pending_unsubscriptions,
+						});
+					},
+
+					Err(err_) => {
+						err = Some(err_);
+
+						for pending_unsubscription in pending_unsubscriptions {
+							self.subscription_updates_waiting_to_be_sent.push_front(SubscriptionUpdate::Unsubscribe(pending_unsubscription));
+						}
+					},
+				};
+			}
+
+			if packets_waiting_to_be_sent.is_empty() {
+				if let Some(err) = err {
 					return Err(err);
-				},
-			};
-
-			match subscription_update {
-				SubscriptionUpdate::Subscribe(subscribe_to) => {
-					let mut subscriptions_waiting_to_be_acked = vec![subscribe_to];
-
-					loop {
-						match self.subscription_updates_waiting_to_be_sent.pop_front() {
-							Some(SubscriptionUpdate::Subscribe(subscribe_to)) => subscriptions_waiting_to_be_acked.push(subscribe_to),
-							Some(unsubscribe @ SubscriptionUpdate::Unsubscribe(_)) => {
-								self.subscription_updates_waiting_to_be_sent.push_front(unsubscribe);
-								break;
-							},
-							None => break,
-						}
-					}
-
-					self.subscription_updates_waiting_to_be_acked.push_back((
-						packet_identifier,
-						BatchedSubscriptionUpdate::Subscribe(subscriptions_waiting_to_be_acked.clone()),
-					));
-
-					packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe {
-						packet_identifier,
-						subscribe_to: subscriptions_waiting_to_be_acked,
-					});
-				},
-
-				SubscriptionUpdate::Unsubscribe(unsubscribe_from) => {
-					let mut unsubscriptions_waiting_to_be_acked = vec![unsubscribe_from];
-
-					loop {
-						match self.subscription_updates_waiting_to_be_sent.pop_front() {
-							Some(SubscriptionUpdate::Unsubscribe(unsubscribe_from)) => unsubscriptions_waiting_to_be_acked.push(unsubscribe_from),
-							Some(subscribe @ SubscriptionUpdate::Subscribe(_)) => {
-								self.subscription_updates_waiting_to_be_sent.push_front(subscribe);
-								break;
-							},
-							None => break,
-						}
-					}
-
-					self.subscription_updates_waiting_to_be_acked.push_back((
-						packet_identifier,
-						BatchedSubscriptionUpdate::Unsubscribe(unsubscriptions_waiting_to_be_acked.clone()),
-					));
-
-					packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe {
-						packet_identifier,
-						unsubscribe_from: unsubscriptions_waiting_to_be_acked,
-					});
-				},
+				}
 			}
 		}
 
