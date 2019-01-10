@@ -301,8 +301,8 @@ impl State {
 			}
 		}
 		else {
-			// Re-create all pending (ie unacked) changes to the set of subscriptions, in order of packet identifier
-			let mut unacked_packets: Vec<_> =
+			// Re-create all pending (ie unacked) changes to the set of subscriptions
+			let unacked_packets: Vec<_> =
 				self.subscription_updates_waiting_to_be_acked.iter()
 				.map(|(packet_identifier, subscription_update)| match subscription_update {
 					BatchedSubscriptionUpdate::Subscribe(subscribe_to) =>
@@ -318,15 +318,6 @@ impl State {
 						},
 				})
 				.collect();
-			unacked_packets.sort_by(|packet1, packet2| match (packet1, packet2) {
-				(
-					crate::proto::Packet::Subscribe { packet_identifier: packet_identifier1, .. },
-					crate::proto::Packet::Subscribe { packet_identifier: packet_identifier2, .. },
-				) =>
-					packet_identifier1.cmp(packet_identifier2),
-
-				_ => unreachable!(),
-			});
 
 			NewConnectionIter::Multiple(unacked_packets.into_iter())
 		}
