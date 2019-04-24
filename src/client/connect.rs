@@ -13,7 +13,11 @@ enum State<IoS> where IoS: super::IoSource {
 	EndBackOff(tokio::timer::Delay),
 	BeginConnecting,
 	WaitingForIoToConnect(<IoS as super::IoSource>::Future),
-	Framed(crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>, FramedState),
+	Framed {
+		framed: crate::logging_framed::LoggingFramed<<IoS as super::IoSource>::Io>,
+		framed_state: FramedState,
+		password: Option<String>,
+	},
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -35,7 +39,7 @@ impl<IoS> std::fmt::Debug for State<IoS> where IoS: super::IoSource {
 			State::EndBackOff(_) => f.write_str("EndBackOff"),
 			State::BeginConnecting => f.write_str("BeginConnecting"),
 			State::WaitingForIoToConnect(_) => f.write_str("WaitingForIoToConnect"),
-			State::Framed(_, framed_state) => f.debug_tuple("Framed").field(framed_state).finish(),
+			State::Framed { framed_state, .. } => f.debug_struct("Framed").field("framed_state", framed_state).finish(),
 		}
 	}
 }
@@ -59,7 +63,6 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 	pub(super) fn poll<'a>(
 		&'a mut self,
 		username: Option<&str>,
-		password: Option<&str>,
 		will: Option<&crate::proto::Publication>,
 		client_id: &mut crate::proto::ClientId,
 		keep_alive: std::time::Duration,
@@ -95,9 +98,14 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 				},
 
 				State::WaitingForIoToConnect(io) => match io.poll() {
-					Ok(futures::Async::Ready(io)) => {
+					Ok(futures::Async::Ready((io, password))) => {
 						let framed = crate::logging_framed::LoggingFramed::new(io);
-						*state = State::Framed(framed, FramedState::BeginSendingConnect);
+						*state =
+							State::Framed {
+								framed,
+								framed_state: FramedState::BeginSendingConnect,
+								password,
+							};
 					},
 
 					Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
@@ -108,10 +116,10 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					},
 				},
 
-				State::Framed(framed, framed_state @ FramedState::BeginSendingConnect) => {
+				State::Framed { framed, framed_state: framed_state @ FramedState::BeginSendingConnect, password } => {
 					let packet = crate::proto::Packet::Connect {
 						username: username.map(ToOwned::to_owned),
-						password: password.map(ToOwned::to_owned),
+						password: password.clone(),
 						will: will.cloned(),
 						client_id: client_id.clone(),
 						keep_alive,
@@ -127,7 +135,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					}
 				},
 
-				State::Framed(framed, framed_state @ FramedState::EndSendingConnect) => match framed.poll_complete() {
+				State::Framed { framed, framed_state: framed_state @ FramedState::EndSendingConnect, .. } => match framed.poll_complete() {
 					Ok(futures::Async::Ready(())) => *framed_state = FramedState::WaitingForConnAck,
 					Ok(futures::Async::NotReady) => return Ok(futures::Async::NotReady),
 					Err(err) => {
@@ -136,7 +144,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					},
 				},
 
-				State::Framed(framed, framed_state @ FramedState::WaitingForConnAck) => match framed.poll() {
+				State::Framed { framed, framed_state: framed_state @ FramedState::WaitingForConnAck, .. } => match framed.poll() {
 					Ok(futures::Async::Ready(Some(packet))) => match packet {
 						crate::proto::Packet::ConnAck { session_present, return_code: crate::proto::ConnectReturnCode::Accepted } => {
 							self.current_back_off = std::time::Duration::from_secs(0);
@@ -180,7 +188,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 					},
 				},
 
-				State::Framed(framed, FramedState::Connected { new_connection, reset_session }) => {
+				State::Framed { framed, framed_state: FramedState::Connected { new_connection, reset_session }, .. } => {
 					let result = Connected {
 						framed,
 						new_connection: *new_connection,

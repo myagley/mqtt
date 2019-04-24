@@ -85,7 +85,6 @@ fn server_generated_id_must_always_resubscribe() {
 			None,
 			None,
 			None,
-			None,
 			io_source,
 			std::time::Duration::from_secs(0),
 			std::time::Duration::from_secs(4),
@@ -225,7 +224,6 @@ fn client_id_should_not_resubscribe_when_session_is_present() {
 			Some("idle_client_id".to_string()),
 			None,
 			None,
-			None,
 			io_source,
 			std::time::Duration::from_secs(0),
 			std::time::Duration::from_secs(4),
@@ -296,7 +294,6 @@ fn should_combine_pending_subscription_updates() {
 
 	let mut client =
 		mqtt::Client::new(
-			None,
 			None,
 			None,
 			None,

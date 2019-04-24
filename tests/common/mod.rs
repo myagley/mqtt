@@ -67,13 +67,13 @@ impl IoSource {
 
 impl mqtt::IoSource for IoSource {
 	type Io = TestConnection;
-	type Future = Box<Future<Item = Self::Io, Error = std::io::Error> + Send>;
+	type Future = Box<Future<Item = (Self::Io, Option<String>), Error = std::io::Error> + Send>;
 
 	fn connect(&mut self) -> Self::Future {
 		println!("client is creating new connection");
 
 		if let Some(io) = self.0.next() {
-			Box::new(futures::future::ok(io))
+			Box::new(futures::future::ok((io, None)))
 		}
 		else {
 			// The client drops the previous Io (TestConnection) before requesting a new one from the IoSource.

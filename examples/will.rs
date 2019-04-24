@@ -84,9 +84,11 @@ fn main() {
 		mqtt::Client::new(
 			client_id,
 			username,
-			password,
 			Some(will),
-			move || tokio::net::TcpStream::connect(&server),
+			move || {
+				let password = password.clone();
+				tokio::net::TcpStream::connect(&server).map(|io| (io, password))
+			},
 			max_reconnect_back_off,
 			keep_alive,
 		);

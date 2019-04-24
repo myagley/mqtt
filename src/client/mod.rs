@@ -31,9 +31,9 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	///     If set, this ID will be used to start a new clean session with the server. On subsequent re-connects, the ID will be re-used.
 	///     Otherwise, the client will use a server-generated ID for each new connection.
 	///
-	/// * `username`, `password`
+	/// * `username`
 	///
-	///     Optional credentials for the server.
+	///     Optional username credential for the server. Note that password is provided via `io_source`.
 	///
 	/// * `io_source`
 	///
@@ -49,7 +49,6 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	pub fn new(
 		client_id: Option<String>,
 		username: Option<String>,
-		password: Option<String>,
 		will: Option<crate::proto::Publication>,
 		io_source: IoS,
 		max_reconnect_back_off: std::time::Duration,
@@ -65,7 +64,6 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 		Client(ClientState::Up {
 			client_id,
 			username,
-			password,
 			will,
 			keep_alive,
 
@@ -156,7 +154,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				ClientState::Up {
 					client_id,
 					username,
-					password,
 					will,
 					keep_alive,
 
@@ -182,7 +179,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 
 					let self::connect::Connected { framed, new_connection, reset_session } = match connect.poll(
 						username.as_ref().map(AsRef::as_ref),
-						password.as_ref().map(AsRef::as_ref),
 						will.as_ref(),
 						client_id,
 						*keep_alive,
@@ -244,7 +240,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				ClientState::ShuttingDown {
 					client_id,
 					username,
-					password,
 					will,
 					keep_alive,
 
@@ -256,7 +251,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				} => {
 					let self::connect::Connected { framed, .. } = match connect.poll(
 						username.as_ref().map(AsRef::as_ref),
-						password.as_ref().map(AsRef::as_ref),
 						will.as_ref(),
 						client_id,
 						*keep_alive,
@@ -316,7 +310,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 			ClientState::Up {
 				client_id,
 				username,
-				password,
 				will,
 				keep_alive,
 
@@ -328,7 +321,6 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 				self.0 = ClientState::ShuttingDown {
 					client_id,
 					username,
-					password,
 					will,
 					keep_alive,
 
@@ -346,27 +338,27 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 	}
 }
 
-/// This trait provides an I/O object that a [`Client`] can use.
+/// This trait provides an I/O object and optional password that a [`Client`] can use.
 ///
 /// The trait is automatically implemented for all [`FnMut`] that return a connection future.
 pub trait IoSource {
 	/// The I/O object
 	type Io: tokio::io::AsyncRead + tokio::io::AsyncWrite;
 
-	/// The connection future
-	type Future: Future<Item = Self::Io>;
+	/// The connection future. Contains the I/O object and optional password.
+	type Future: Future<Item = (Self::Io, Option<String>)>;
 
 	/// Attempts the connection and returns a [`Future`] that resolves when the connection succeeds
 	fn connect(&mut self) -> Self::Future;
 }
 
-impl<F, A> IoSource for F
+impl<F, A, I> IoSource for F
 where
 	F: FnMut() -> A,
-	A: Future,
-	<A as Future>::Item: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+	A: Future<Item = (I, Option<String>)>,
+	I: tokio::io::AsyncRead + tokio::io::AsyncWrite,
 {
-	type Io = <A as Future>::Item;
+	type Io = I;
 	type Future = A;
 
 	fn connect(&mut self) -> Self::Future {
@@ -420,7 +412,6 @@ enum ClientState<IoS> where IoS: IoSource {
 	Up {
 		client_id: crate::proto::ClientId,
 		username: Option<String>,
-		password: Option<String>,
 		will: Option<crate::proto::Publication>,
 		keep_alive: std::time::Duration,
 
@@ -441,7 +432,6 @@ enum ClientState<IoS> where IoS: IoSource {
 	ShuttingDown {
 		client_id: crate::proto::ClientId,
 		username: Option<String>,
-		password: Option<String>,
 		will: Option<crate::proto::Publication>,
 		keep_alive: std::time::Duration,
 

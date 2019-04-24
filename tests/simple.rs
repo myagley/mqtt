@@ -57,7 +57,6 @@ fn server_generated_id_can_connect_and_idle() {
 			None,
 			None,
 			None,
-			None,
 			io_source,
 			std::time::Duration::from_secs(0),
 			std::time::Duration::from_secs(4),
@@ -152,7 +151,6 @@ fn client_id_can_connect_and_idle() {
 	let client =
 		mqtt::Client::new(
 			Some("idle_client_id".to_string()),
-			None,
 			None,
 			None,
 			io_source,
