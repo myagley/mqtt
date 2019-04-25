@@ -211,6 +211,7 @@ impl tokio_codec::Encoder for RemainingLengthCodec {
 		dst.reserve(4 * std::mem::size_of::<u8>());
 
 		let original = item;
+		let mut num_bytes_written = 0_usize;
 
 		loop {
 			#[allow(clippy::cast_possible_truncation)]
@@ -223,12 +224,13 @@ impl tokio_codec::Encoder for RemainingLengthCodec {
 			}
 
 			dst.put_u8(encoded_byte);
+			num_bytes_written += 1;
 
 			if item == 0 {
 				break;
 			}
 
-			if dst.len() == 4 {
+			if num_bytes_written == 4 {
 				return Err(EncodeError::RemainingLengthTooHigh(original));
 			}
 		}
@@ -476,9 +478,15 @@ mod tests {
 	fn remaining_length_encode_inner_ok(value: usize, expected: &[u8]) {
 		use tokio_codec::Encoder;
 
+		// Can encode into an empty buffer
 		let mut bytes = bytes::BytesMut::new();
 		super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap();
 		assert_eq!(&*bytes, expected);
+
+		// Can encode into a partially populated buffer
+		let mut bytes: bytes::BytesMut = vec![0x00; 3].into();
+		super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap();
+		assert_eq!(&bytes[3..], expected);
 	}
 
 	fn remaining_length_encode_inner_too_high(value: usize) {
