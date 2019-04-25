@@ -343,7 +343,7 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 /// The trait is automatically implemented for all [`FnMut`] that return a connection future.
 pub trait IoSource {
 	/// The I/O object
-	type Io: tokio::io::AsyncRead + tokio::io::AsyncWrite;
+	type Io: tokio_io::AsyncRead + tokio_io::AsyncWrite;
 
 	/// The connection future. Contains the I/O object and optional password.
 	type Future: Future<Item = (Self::Io, Option<String>)>;
@@ -356,7 +356,7 @@ impl<F, A, I> IoSource for F
 where
 	F: FnMut() -> A,
 	A: Future<Item = (I, Option<String>)>,
-	I: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+	I: tokio_io::AsyncRead + tokio_io::AsyncWrite,
 {
 	type Io = I;
 	type Future = A;
@@ -460,7 +460,7 @@ fn client_poll<S>(
 	subscriptions: &mut self::subscriptions::State,
 ) -> futures::Poll<Event, Error>
 where
-	S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+	S: tokio_io::AsyncRead + tokio_io::AsyncWrite,
 {
 	loop {
 		// Begin sending any packets waiting to be sent
@@ -610,7 +610,7 @@ pub enum Error {
 	DuplicateExactlyOncePublishPacketNotMarkedDuplicate(crate::proto::PacketIdentifier),
 	EncodePacket(crate::proto::EncodeError),
 	PacketIdentifiersExhausted,
-	PingTimer(tokio::timer::Error),
+	PingTimer(tokio_timer::Error),
 	ServerClosedConnection,
 	SubAckDoesNotContainEnoughQoS(crate::proto::PacketIdentifier, usize, usize),
 	SubscriptionDowngraded(String, crate::proto::QoS, crate::proto::QoS),

@@ -10,7 +10,7 @@ pub(super) struct Connect<IoS> where IoS: super::IoSource {
 
 enum State<IoS> where IoS: super::IoSource {
 	BeginBackOff,
-	EndBackOff(tokio::timer::Delay),
+	EndBackOff(tokio_timer::Delay),
 	BeginConnecting,
 	WaitingForIoToConnect(<IoS as super::IoSource>::Future),
 	Framed {
@@ -83,7 +83,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 						log::debug!("Backing off for {:?}", back_off);
 						let back_off_deadline = std::time::Instant::now() + back_off;
 						self.current_back_off = std::cmp::min(self.max_back_off, self.current_back_off * 2);
-						*state = State::EndBackOff(tokio::timer::Delay::new(back_off_deadline));
+						*state = State::EndBackOff(tokio_timer::Delay::new(back_off_deadline));
 					},
 				},
 

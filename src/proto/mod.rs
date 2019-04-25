@@ -100,7 +100,7 @@ impl Default for Utf8StringDecoderState {
 	}
 }
 
-impl tokio::codec::Decoder for Utf8StringCodec {
+impl tokio_codec::Decoder for Utf8StringCodec {
 	type Item = String;
 	type Error = DecodeError;
 
@@ -132,7 +132,7 @@ impl tokio::codec::Decoder for Utf8StringCodec {
 	}
 }
 
-impl tokio::codec::Encoder for Utf8StringCodec {
+impl tokio_codec::Encoder for Utf8StringCodec {
 	type Item = String;
 	type Error = EncodeError;
 
@@ -176,7 +176,7 @@ impl Default for RemainingLengthDecoderState {
 	}
 }
 
-impl tokio::codec::Decoder for RemainingLengthCodec {
+impl tokio_codec::Decoder for RemainingLengthCodec {
 	type Item = usize;
 	type Error = DecodeError;
 
@@ -203,7 +203,7 @@ impl tokio::codec::Decoder for RemainingLengthCodec {
 	}
 }
 
-impl tokio::codec::Encoder for RemainingLengthCodec {
+impl tokio_codec::Encoder for RemainingLengthCodec {
 	type Item = usize;
 	type Error = EncodeError;
 
@@ -474,7 +474,7 @@ mod tests {
 	}
 
 	fn remaining_length_encode_inner_ok(value: usize, expected: &[u8]) {
-		use tokio::codec::Encoder;
+		use tokio_codec::Encoder;
 
 		let mut bytes = bytes::BytesMut::new();
 		super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap();
@@ -482,7 +482,7 @@ mod tests {
 	}
 
 	fn remaining_length_encode_inner_too_high(value: usize) {
-		use tokio::codec::Encoder;
+		use tokio_codec::Encoder;
 
 		let mut bytes = bytes::BytesMut::new();
 		let err = super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap_err();
@@ -521,7 +521,7 @@ mod tests {
 	}
 
 	fn remaining_length_decode_inner_ok(bytes: &[u8], expected: usize) {
-		use tokio::codec::Decoder;
+		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
 		let actual = super::RemainingLengthCodec::default().decode(&mut bytes).unwrap().unwrap();
@@ -530,7 +530,7 @@ mod tests {
 	}
 
 	fn remaining_length_decode_inner_too_high(bytes: &[u8]) {
-		use tokio::codec::Decoder;
+		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
 		let err = super::RemainingLengthCodec::default().decode(&mut bytes).unwrap_err();
@@ -542,7 +542,7 @@ mod tests {
 	}
 
 	fn remaining_length_decode_inner_incomplete_packet(bytes: &[u8]) {
-		use tokio::codec::Decoder;
+		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
 		assert_eq!(super::RemainingLengthCodec::default().decode(&mut bytes).unwrap(), None);

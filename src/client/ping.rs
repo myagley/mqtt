@@ -2,7 +2,7 @@ use futures::Future;
 
 pub(super) enum State {
 	BeginWaitingForNextPing,
-	WaitingForNextPing(tokio::timer::Delay),
+	WaitingForNextPing(tokio_timer::Delay),
 }
 
 impl State {
@@ -25,7 +25,7 @@ impl State {
 
 			match self {
 				State::BeginWaitingForNextPing => {
-					let ping_timer = tokio::timer::Delay::new(deadline(std::time::Instant::now(), keep_alive));
+					let ping_timer = tokio_timer::Delay::new(deadline(std::time::Instant::now(), keep_alive));
 					*self = State::WaitingForNextPing(ping_timer);
 				},
 

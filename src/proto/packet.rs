@@ -206,7 +206,7 @@ impl Default for PacketDecoderState {
 	}
 }
 
-impl tokio::codec::Decoder for PacketCodec {
+impl tokio_codec::Decoder for PacketCodec {
 	type Item = Packet;
 	type Error = super::DecodeError;
 
@@ -536,7 +536,7 @@ impl tokio::codec::Decoder for PacketCodec {
 	}
 }
 
-impl tokio::codec::Encoder for PacketCodec {
+impl tokio_codec::Encoder for PacketCodec {
 	type Item = Packet;
 	type Error = super::EncodeError;
 
@@ -726,7 +726,7 @@ fn encode_packet<F>(dst: &mut bytes::BytesMut, packet_type: u8, f: F) -> Result<
 where
 	F: FnOnce(&mut bytes::BytesMut) -> Result<(), super::EncodeError>,
 {
-	use tokio::codec::Encoder;
+	use tokio_codec::Encoder;
 
 	let mut remaining_dst = bytes::BytesMut::new();
 	f(&mut remaining_dst)?;
