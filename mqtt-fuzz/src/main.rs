@@ -17,14 +17,22 @@ fn main() {
 			// So the fuzzer can generate a remaining length like `0x81 0x00` which would get re-encoded as `0x01`
 			// and not match the input.
 
-			let mut bytes = bytes::BytesMut::new();
+			// Re-encode the decoded packet at the end of the input buffer.
+			// This simulates encoding at the end of a partially populated output buffer.
+			let input_remaining = bytes.len();
 			codec.encode(packet.clone(), &mut bytes).unwrap();
+			bytes.advance(input_remaining);
 
 			let packet2 = codec.decode(&mut bytes).unwrap().unwrap();
-
 			assert_eq!(packet, packet2);
 
 			assert!(bytes.is_empty());
+
+			// Another encode-decode cycle, this time with an initially empty buffer.
+			codec.encode(packet.clone(), &mut bytes).unwrap();
+
+			let packet2 = codec.decode(&mut bytes).unwrap().unwrap();
+			assert_eq!(packet, packet2);
 		}
 	})
 }

@@ -26,14 +26,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let packet = codec.decode(&mut bytes)?.ok_or("incomplete packet")?;
 	println!("{:#?}", packet);
 
-	let mut bytes = bytes::BytesMut::new();
+	let input_remaining = bytes.len();
 	codec.encode(packet.clone(), &mut bytes)?;
+	bytes.advance(input_remaining);
+
 	let packet2 = codec.decode(&mut bytes)?.ok_or("could not decode re-encoded packet")?;
 	assert_eq!(packet, packet2);
 
 	if !bytes.is_empty() {
 		return Err("leftover bytes".into());
 	}
+
+	codec.encode(packet.clone(), &mut bytes)?;
+
+	let packet2 = codec.decode(&mut bytes)?.ok_or("could not decode re-encoded packet")?;
+	assert_eq!(packet, packet2);
 
 	Ok(())
 }
