@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				topic_name: "will-topic".to_string(),
 				qos: mqtt::proto::QoS::ExactlyOnce,
 				retain: true,
-				payload: b"\x00\x01\x02\xFF\xFE\xFD".to_vec(),
+				payload: b"\x00\x01\x02\xFF\xFE\xFD"[..].into(),
 			}),
 			client_id: mqtt::proto::ClientId::IdWithExistingSession("id".to_string()),
 			keep_alive: std::time::Duration::from_secs(5),
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			packet_identifier_dup_qos: mqtt::proto::PacketIdentifierDupQoS::ExactlyOnce(mqtt::proto::PacketIdentifier::new(5).unwrap(), true),
 			retain: true,
 			topic_name: "publish-topic".to_string(),
-			payload: b"\x00\x01\x02\xFF\xFE\xFD".to_vec(),
+			payload: b"\x00\x01\x02\xFF\xFE\xFD"[..].into(),
 		}),
 
 		("pubrec", mqtt::proto::Packet::PubRec {

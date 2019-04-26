@@ -97,6 +97,8 @@ fn main() {
 			Ok(())
 		}));
 
+	let payload: bytes::Bytes = payload.into();
+
 	let mut publish_handle = client.publish_handle().expect("couldn't get publish handle");
 	executor.clone().spawn(
 		tokio::timer::Interval::new(std::time::Instant::now(), publish_frequency)
@@ -111,7 +113,7 @@ fn main() {
 					topic_name: topic.clone(),
 					qos,
 					retain: false,
-					payload: payload.clone().into_bytes(),
+					payload: payload.clone(),
 				})
 				.then(move |result| {
 					let () = result.expect("couldn't publish");

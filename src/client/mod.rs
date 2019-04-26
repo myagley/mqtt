@@ -389,7 +389,7 @@ pub struct ReceivedPublication {
 	pub dup: bool,
 	pub qos: crate::proto::QoS,
 	pub retain: bool,
-	pub payload: Vec<u8>,
+	pub payload: bytes::Bytes,
 }
 
 pub struct ShutdownHandle(futures::sync::mpsc::Sender<()>);

@@ -77,7 +77,7 @@ fn main() {
 		topic_name: topic.clone(),
 		qos,
 		retain: false,
-		payload: payload.into_bytes(),
+		payload: payload.into(),
 	};
 
 	let client =

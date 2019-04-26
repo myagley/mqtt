@@ -41,7 +41,7 @@ pub enum Packet {
 		packet_identifier_dup_qos: PacketIdentifierDupQoS,
 		retain: bool,
 		topic_name: String,
-		payload: Vec<u8>,
+		payload: bytes::Bytes,
 	},
 
 	/// Ref: 3.5 PUBREC – Publish received (QoS 2 publish received, part 1)
@@ -182,7 +182,7 @@ pub struct Publication {
 	pub topic_name: String,
 	pub qos: crate::proto::QoS,
 	pub retain: bool,
-	pub payload: Vec<u8>,
+	pub payload: bytes::Bytes,
 }
 
 /// A tokio codec that encodes and decodes MQTT packets.
@@ -306,7 +306,7 @@ impl tokio_codec::Decoder for PacketCodec {
 						if src.len() < payload_len {
 							return Err(super::DecodeError::IncompletePacket);
 						}
-						let payload = (&*src.split_to(payload_len)).to_owned();
+						let payload = src.split_to(payload_len).freeze();
 
 						Some(Publication {
 							topic_name,
@@ -406,8 +406,7 @@ impl tokio_codec::Decoder for PacketCodec {
 					qos => return Err(super::DecodeError::UnrecognizedQoS(qos)),
 				};
 
-				let mut payload = vec![0_u8; src.len()];
-				payload.copy_from_slice(&src.take());
+				let payload = src.take().freeze();
 
 				Ok(Some(Packet::Publish {
 					packet_identifier_dup_qos,
