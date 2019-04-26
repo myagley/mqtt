@@ -6,7 +6,9 @@ use tokio::codec::Encoder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let in_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("in");
-	std::fs::remove_dir_all(&in_dir)?;
+	if in_dir.exists() {
+		std::fs::remove_dir_all(&in_dir)?;
+	}
 	std::fs::create_dir(&in_dir)?;
 
 	let packets = vec![
