@@ -31,7 +31,7 @@ impl State {
 		let mut publication_received = None;
 
 		match packet.take() {
-			Some(crate::proto::Packet::PubAck { packet_identifier }) => match self.waiting_to_be_acked.remove(&packet_identifier) {
+			Some(crate::proto::Packet::PubAck(crate::proto::PubAck { packet_identifier })) => match self.waiting_to_be_acked.remove(&packet_identifier) {
 				Some((ack_sender, _)) => {
 					packet_identifiers.discard(packet_identifier);
 
@@ -43,7 +43,7 @@ impl State {
 				None => log::warn!("ignoring PUBACK for a PUBLISH we never sent"),
 			},
 
-			Some(crate::proto::Packet::PubComp { packet_identifier }) => match self.waiting_to_be_completed.remove(&packet_identifier) {
+			Some(crate::proto::Packet::PubComp(crate::proto::PubComp { packet_identifier })) => match self.waiting_to_be_completed.remove(&packet_identifier) {
 				Some((ack_sender, _)) => {
 					packet_identifiers.discard(packet_identifier);
 
@@ -55,7 +55,7 @@ impl State {
 				None => log::warn!("ignoring PUBCOMP for a PUBREL we never sent"),
 			},
 
-			Some(crate::proto::Packet::Publish { packet_identifier_dup_qos, retain, topic_name, payload }) => match packet_identifier_dup_qos {
+			Some(crate::proto::Packet::Publish(crate::proto::Publish { packet_identifier_dup_qos, retain, topic_name, payload })) => match packet_identifier_dup_qos {
 				crate::proto::PacketIdentifierDupQoS::AtMostOnce => {
 					publication_received = Some(crate::ReceivedPublication {
 						topic_name,
@@ -75,9 +75,9 @@ impl State {
 						payload,
 					});
 
-					packets_waiting_to_be_sent.push(crate::proto::Packet::PubAck {
+					packets_waiting_to_be_sent.push(crate::proto::Packet::PubAck(crate::proto::PubAck {
 						packet_identifier,
-					});
+					}));
 				},
 
 				crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, dup) => {
@@ -102,13 +102,13 @@ impl State {
 						},
 					}
 
-					packets_waiting_to_be_sent.push(crate::proto::Packet::PubRec {
+					packets_waiting_to_be_sent.push(crate::proto::Packet::PubRec(crate::proto::PubRec {
 						packet_identifier,
-					});
+					}));
 				},
 			},
 
-			Some(crate::proto::Packet::PubRec { packet_identifier }) => {
+			Some(crate::proto::Packet::PubRec(crate::proto::PubRec { packet_identifier })) => {
 				match self.waiting_to_be_acked.remove(&packet_identifier) {
 					Some((ack_sender, packet)) => {
 						self.waiting_to_be_completed.insert(packet_identifier, (ack_sender, packet));
@@ -116,12 +116,12 @@ impl State {
 					None => log::warn!("ignoring PUBREC for a PUBLISH we never sent"),
 				}
 
-				packets_waiting_to_be_sent.push(crate::proto::Packet::PubRel {
+				packets_waiting_to_be_sent.push(crate::proto::Packet::PubRel(crate::proto::PubRel {
 					packet_identifier,
-				});
+				}));
 			},
 
-			Some(crate::proto::Packet::PubRel { packet_identifier }) => {
+			Some(crate::proto::Packet::PubRel(crate::proto::PubRel { packet_identifier })) => {
 				if let Some(publication) = self.waiting_to_be_released.remove(&packet_identifier) {
 					packet_identifiers.discard(packet_identifier);
 					publication_received = Some(publication);
@@ -130,9 +130,9 @@ impl State {
 					log::warn!("ignoring PUBREL for a PUBREC we never sent");
 				}
 
-				packets_waiting_to_be_sent.push(crate::proto::Packet::PubComp {
+				packets_waiting_to_be_sent.push(crate::proto::Packet::PubComp(crate::proto::PubComp {
 					packet_identifier,
-				});
+				}));
 			},
 
 			other => *packet = other,
@@ -147,12 +147,12 @@ impl State {
 		while let Some(PublishRequest { publication, ack_sender }) = self.publish_requests_waiting_to_be_sent.pop_front() {
 			match publication.qos {
 				crate::proto::QoS::AtMostOnce => {
-					packets_waiting_to_be_sent.push(crate::proto::Packet::Publish {
+					packets_waiting_to_be_sent.push(crate::proto::Packet::Publish(crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtMostOnce,
 						retain: publication.retain,
 						topic_name: publication.topic_name,
 						payload: publication.payload,
-					});
+					}));
 
 					match ack_sender.send(()) {
 						Ok(()) => (),
@@ -169,19 +169,19 @@ impl State {
 						},
 					};
 
-					let packet = crate::proto::Packet::Publish {
+					let packet = crate::proto::Packet::Publish(crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, false),
 						retain: publication.retain,
 						topic_name: publication.topic_name.clone(),
 						payload: publication.payload.clone(),
-					};
+					});
 
-					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish {
+					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish(crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, true),
 						retain: publication.retain,
 						topic_name: publication.topic_name,
 						payload: publication.payload,
-					}));
+					})));
 
 					packets_waiting_to_be_sent.push(packet);
 				},
@@ -195,19 +195,19 @@ impl State {
 						},
 					};
 
-					let packet = crate::proto::Packet::Publish {
+					let packet = crate::proto::Packet::Publish(crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, false),
 						retain: publication.retain,
 						topic_name: publication.topic_name.clone(),
 						payload: publication.payload.clone(),
-					};
+					});
 
-					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish {
+					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish(crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, true),
 						retain: publication.retain,
 						topic_name: publication.topic_name,
 						payload: publication.payload,
-					}));
+					})));
 
 					packets_waiting_to_be_sent.push(packet);
 				},
@@ -233,9 +233,9 @@ impl State {
 		}
 
 		self.waiting_to_be_acked.values().map(|(_, packet)| packet.clone())
-		.chain(self.waiting_to_be_released.keys().map(|&packet_identifier| crate::proto::Packet::PubRec {
+		.chain(self.waiting_to_be_released.keys().map(|&packet_identifier| crate::proto::Packet::PubRec(crate::proto::PubRec {
 			packet_identifier,
-		}))
+		})))
 		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| packet.clone()))
 	}
 

@@ -11,7 +11,7 @@ impl State {
 		packet: &mut Option<crate::proto::Packet>,
 		keep_alive: std::time::Duration,
 	) -> futures::Poll<crate::proto::Packet, super::Error> {
-		if let Some(crate::proto::Packet::PingResp) = packet {
+		if let Some(crate::proto::Packet::PingResp(crate::proto::PingResp)) = packet {
 			let _ = packet.take();
 
 			match self {
@@ -32,7 +32,7 @@ impl State {
 				State::WaitingForNextPing(ping_timer) => match ping_timer.poll().map_err(super::Error::PingTimer)? {
 					futures::Async::Ready(()) => {
 						ping_timer.reset(deadline(ping_timer.deadline(), keep_alive));
-						return Ok(futures::Async::Ready(crate::proto::Packet::PingReq));
+						return Ok(futures::Async::Ready(crate::proto::Packet::PingReq(crate::proto::PingReq)));
 					},
 
 					futures::Async::NotReady =>

@@ -15,3 +15,9 @@ tokio = "0.1"
 bytes = "0.4"
 mqtt = { path = ".." }
 tokio = "0.1"
+
+[profile.dev]
+codegen-units = 1 # Workaround for https://github.com/rust-fuzz/cargo-fuzz/issues/161
+
+[profile.release]
+codegen-units = 1 # Workaround for https://github.com/rust-fuzz/cargo-fuzz/issues/161

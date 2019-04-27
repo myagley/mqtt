@@ -117,13 +117,13 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 				},
 
 				State::Framed { framed, framed_state: framed_state @ FramedState::BeginSendingConnect, password } => {
-					let packet = crate::proto::Packet::Connect {
+					let packet = crate::proto::Packet::Connect(crate::proto::Connect {
 						username: username.map(ToOwned::to_owned),
 						password: password.clone(),
 						will: will.cloned(),
 						client_id: client_id.clone(),
 						keep_alive,
-					};
+					});
 
 					match framed.start_send(packet) {
 						Ok(futures::AsyncSink::Ready) => *framed_state = FramedState::EndSendingConnect,
@@ -146,7 +146,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 
 				State::Framed { framed, framed_state: framed_state @ FramedState::WaitingForConnAck, .. } => match framed.poll() {
 					Ok(futures::Async::Ready(Some(packet))) => match packet {
-						crate::proto::Packet::ConnAck { session_present, return_code: crate::proto::ConnectReturnCode::Accepted } => {
+						crate::proto::Packet::ConnAck(crate::proto::ConnAck { session_present, return_code: crate::proto::ConnectReturnCode::Accepted }) => {
 							self.current_back_off = std::time::Duration::from_secs(0);
 
 							let reset_session = match client_id {
@@ -164,7 +164,7 @@ impl<IoS> Connect<IoS> where IoS: super::IoSource, <<IoS as super::IoSource>::Fu
 							*framed_state = FramedState::Connected { new_connection: true, reset_session };
 						},
 
-						crate::proto::Packet::ConnAck { return_code: crate::proto::ConnectReturnCode::Refused(return_code), .. } => {
+						crate::proto::Packet::ConnAck(crate::proto::ConnAck { return_code: crate::proto::ConnectReturnCode::Refused(return_code), .. }) => {
 							log::warn!("could not connect to server: connection refused: {:?}", return_code);
 							*state = State::BeginBackOff;
 						},

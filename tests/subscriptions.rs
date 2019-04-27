@@ -6,77 +6,77 @@ fn server_generated_id_must_always_resubscribe() {
 
 	let (io_source, done) = common::IoSource::new(vec![
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::ServerGenerated,
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				session_present: false,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe(mqtt::proto::Subscribe {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				subscribe_to: vec![
 					mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce },
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck(mqtt::proto::SubAck {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				qos: vec![
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtMostOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtLeastOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::ExactlyOnce),
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::ServerGenerated,
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				session_present: false,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe(mqtt::proto::Subscribe {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(2).unwrap(),
 				subscribe_to: vec![
 					mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce },
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck(mqtt::proto::SubAck {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(2).unwrap(),
 				qos: vec![
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtMostOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtLeastOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::ExactlyOnce),
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 	]);
 
@@ -123,99 +123,99 @@ fn client_id_should_not_resubscribe_when_session_is_present() {
 
 	let (io_source, done) = common::IoSource::new(vec![
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::IdWithCleanSession("idle_client_id".to_string()),
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				session_present: false,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe(mqtt::proto::Subscribe {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				subscribe_to: vec![
 					mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce },
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck(mqtt::proto::SubAck {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				qos: vec![
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtMostOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtLeastOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::ExactlyOnce),
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::IdWithExistingSession("idle_client_id".to_string()),
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				// The clean session bit also determines if the *current* session should be persisted.
 				// So when the previous session requested a clean session, the server would not persist *that* session either.
 				// So this second session will still have `session_present == false`
 				session_present: false,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe(mqtt::proto::Subscribe {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(2).unwrap(),
 				subscribe_to: vec![
 					mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtMostOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic2".to_string(), qos: mqtt::proto::QoS::AtLeastOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce },
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck(mqtt::proto::SubAck {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(2).unwrap(),
 				qos: vec![
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtMostOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtLeastOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::ExactlyOnce),
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::IdWithExistingSession("idle_client_id".to_string()),
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				session_present: true,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 	]);
 
@@ -257,38 +257,38 @@ fn should_combine_pending_subscription_updates() {
 
 	let (io_source, done) = common::IoSource::new(vec![
 		vec![
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Connect(mqtt::proto::Connect {
 				username: None,
 				password: None,
 				will: None,
 				client_id: mqtt::proto::ClientId::ServerGenerated,
 				keep_alive: std::time::Duration::from_secs(4),
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::ConnAck(mqtt::proto::ConnAck {
 				session_present: false,
 				return_code: mqtt::proto::ConnectReturnCode::Accepted,
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe {
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::Subscribe(mqtt::proto::Subscribe {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				subscribe_to: vec![
 					mqtt::proto::SubscribeTo { topic_filter: "topic1".to_string(), qos: mqtt::proto::QoS::AtLeastOnce },
 					mqtt::proto::SubscribeTo { topic_filter: "topic3".to_string(), qos: mqtt::proto::QoS::ExactlyOnce },
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck {
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::SubAck(mqtt::proto::SubAck {
 				packet_identifier: mqtt::proto::PacketIdentifier::new(1).unwrap(),
 				qos: vec![
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::AtLeastOnce),
 					mqtt::proto::SubAckQos::Success(mqtt::proto::QoS::ExactlyOnce),
 				],
-			}),
+			})),
 
-			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq),
+			common::TestConnectionStep::Receives(mqtt::proto::Packet::PingReq(mqtt::proto::PingReq)),
 
-			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp),
+			common::TestConnectionStep::Sends(mqtt::proto::Packet::PingResp(mqtt::proto::PingResp)),
 		],
 	]);
 

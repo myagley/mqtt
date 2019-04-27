@@ -8,6 +8,22 @@ mod packet;
 
 pub use self::packet::{
 	Packet,
+
+	ConnAck,
+	Connect,
+	Disconnect,
+	PingReq,
+	PingResp,
+	PubAck,
+	PubComp,
+	Publish,
+	PubRec,
+	PubRel,
+	SubAck,
+	Subscribe,
+	UnsubAck,
+	Unsubscribe,
+
 	PacketCodec,
 	PacketIdentifierDupQoS,
 	Publication,
@@ -78,44 +94,39 @@ impl From<ConnectReturnCode> for u8 {
 	}
 }
 
-/// A tokio codec that encodes and decodes MQTT-format strings.
+/// A tokio decoder of MQTT-format strings.
 ///
 /// Strings are prefixed with a two-byte big-endian length and are encoded as utf-8.
 ///
 /// Ref: 1.5.3 UTF-8 encoded strings
-#[derive(Debug, Default)]
-pub struct Utf8StringCodec {
-	decoder_state: Utf8StringDecoderState,
-}
-
 #[derive(Debug)]
-pub enum Utf8StringDecoderState {
+pub enum Utf8StringDecoder {
 	Empty,
 	HaveLength(usize),
 }
 
-impl Default for Utf8StringDecoderState {
+impl Default for Utf8StringDecoder {
 	fn default() -> Self {
-		Utf8StringDecoderState::Empty
+		Utf8StringDecoder::Empty
 	}
 }
 
-impl tokio_codec::Decoder for Utf8StringCodec {
+impl tokio_codec::Decoder for Utf8StringDecoder {
 	type Item = String;
 	type Error = DecodeError;
 
 	fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
 		loop {
-			match &mut self.decoder_state {
-				Utf8StringDecoderState::Empty => {
+			match self {
+				Utf8StringDecoder::Empty => {
 					let len = match src.try_get_u16_be() {
 						Ok(len) => len as usize,
 						Err(_) => return Ok(None),
 					};
-					self.decoder_state = Utf8StringDecoderState::HaveLength(len);
+					*self = Utf8StringDecoder::HaveLength(len);
 				},
 
-				Utf8StringDecoderState::HaveLength(len) => {
+				Utf8StringDecoder::HaveLength(len) => {
 					if src.len() < *len {
 						return Ok(None);
 					}
@@ -124,7 +135,7 @@ impl tokio_codec::Decoder for Utf8StringCodec {
 						Ok(s) => s.to_string(),
 						Err(err) => return Err(DecodeError::StringNotUtf8(err)),
 					};
-					self.decoder_state = Utf8StringDecoderState::Empty;
+					*self = Utf8StringDecoder::Empty;
 					return Ok(Some(s));
 				},
 			}
@@ -132,51 +143,39 @@ impl tokio_codec::Decoder for Utf8StringCodec {
 	}
 }
 
-impl tokio_codec::Encoder for Utf8StringCodec {
-	type Item = String;
-	type Error = EncodeError;
+fn encode_utf8_str<B>(item: &str, dst: &mut B) -> Result<(), EncodeError> where B: ByteBuf {
+	#[allow(clippy::cast_possible_truncation)]
+	dst.put_u16_be_bytes(match item.len() {
+		len if len <= usize::from(u16::max_value()) => len as u16,
+		len => return Err(EncodeError::StringTooLarge(len)),
+	});
 
-	fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
-		dst.reserve(std::mem::size_of::<u16>() + item.len());
+	dst.put_slice_bytes(item.as_bytes());
 
-		#[allow(clippy::cast_possible_truncation)]
-		match item.len() {
-			len if len <= u16::max_value() as usize => dst.put_u16_be(len as u16),
-			len => return Err(EncodeError::StringTooLarge(len)),
-		}
-
-		dst.put_slice(item.as_bytes());
-
-		Ok(())
-	}
+	Ok(())
 }
 
-/// A tokio codec that encodes and decodes MQTT-format "remaining length" numbers.
+/// A tokio decoder for MQTT-format "remaining length" numbers.
 ///
 /// These numbers are encoded with a variable-length scheme that uses the MSB of each byte as a continuation bit.
 ///
 /// Ref: 2.2.3 Remaining Length
-#[derive(Debug, Default)]
-pub struct RemainingLengthCodec {
-	decoder_state: RemainingLengthDecoderState,
-}
-
 #[derive(Debug)]
-pub struct RemainingLengthDecoderState {
+pub struct RemainingLengthDecoder {
 	result: usize,
 	num_bytes_read: usize,
 }
 
-impl Default for RemainingLengthDecoderState {
+impl Default for RemainingLengthDecoder {
 	fn default() -> Self {
-		RemainingLengthDecoderState {
+		RemainingLengthDecoder {
 			result: 0,
 			num_bytes_read: 0,
 		}
 	}
 }
 
-impl tokio_codec::Decoder for RemainingLengthCodec {
+impl tokio_codec::Decoder for RemainingLengthDecoder {
 	type Item = usize;
 	type Error = DecodeError;
 
@@ -187,56 +186,51 @@ impl tokio_codec::Decoder for RemainingLengthCodec {
 				Err(_) => return Ok(None),
 			};
 
-			self.decoder_state.result |= ((encoded_byte & 0x7F) as usize) << (self.decoder_state.num_bytes_read * 7);
-			self.decoder_state.num_bytes_read += 1;
+			self.result |= ((encoded_byte & 0x7F) as usize) << (self.num_bytes_read * 7);
+			self.num_bytes_read += 1;
 
 			if encoded_byte & 0x80 == 0 {
-				let result = self.decoder_state.result;
-				self.decoder_state = Default::default();
+				let result = self.result;
+				*self = Default::default();
 				return Ok(Some(result));
 			}
 
-			if self.decoder_state.num_bytes_read == 4 {
+			if self.num_bytes_read == 4 {
 				return Err(DecodeError::RemainingLengthTooHigh);
 			}
 		}
 	}
 }
 
-impl tokio_codec::Encoder for RemainingLengthCodec {
-	type Item = usize;
-	type Error = EncodeError;
+fn encode_remaining_length<B>(mut item: usize, dst: &mut B) -> Result<(), EncodeError> where B: ByteBuf {
+	dst.reserve_bytes(4 * std::mem::size_of::<u8>());
 
-	fn encode(&mut self, mut item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
-		dst.reserve(4 * std::mem::size_of::<u8>());
+	let original = item;
+	let mut num_bytes_written = 0_usize;
 
-		let original = item;
-		let mut num_bytes_written = 0_usize;
+	loop {
+		#[allow(clippy::cast_possible_truncation)]
+		let mut encoded_byte = (item & 0x7F) as u8;
 
-		loop {
-			#[allow(clippy::cast_possible_truncation)]
-			let mut encoded_byte = (item & 0x7F) as u8;
+		item >>= 7;
 
-			item >>= 7;
-
-			if item > 0 {
-				encoded_byte |= 0x80;
-			}
-
-			dst.put_u8(encoded_byte);
-			num_bytes_written += 1;
-
-			if item == 0 {
-				break;
-			}
-
-			if num_bytes_written == 4 {
-				return Err(EncodeError::RemainingLengthTooHigh(original));
-			}
+		if item > 0 {
+			encoded_byte |= 0x80;
 		}
 
-		Ok(())
+		dst.put_u8_bytes(encoded_byte);
+		num_bytes_written += 1;
+
+		if item == 0 {
+			break;
+		}
+
+		if num_bytes_written == 4 {
+			return Err(EncodeError::RemainingLengthTooHigh(original));
+		}
 	}
+
+	Ok(())
 }
 
 /// A packet identifier. Two-byte unsigned integer that cannot be zero.
@@ -411,16 +405,78 @@ impl From<std::io::Error> for EncodeError {
 	}
 }
 
+trait ByteBuf {
+	fn reserve_bytes(&mut self, additional: usize);
+
+	fn put_u8_bytes(&mut self, n: u8);
+
+	fn put_u16_be_bytes(&mut self, n: u16);
+
+	fn put_packet_identifier_bytes(&mut self, packet_identifier: PacketIdentifier) {
+		self.put_u16_be_bytes(packet_identifier.0);
+	}
+
+	fn put_slice_bytes(&mut self, src: &[u8]);
+}
+
+impl ByteBuf for bytes::BytesMut {
+	fn reserve_bytes(&mut self, additional: usize) {
+		self.reserve(additional);
+	}
+
+	fn put_u8_bytes(&mut self, n: u8) {
+		self.put_u8(n);
+	}
+
+	fn put_u16_be_bytes(&mut self, n: u16) {
+		self.put_u16_be(n);
+	}
+
+	fn put_slice_bytes(&mut self, src: &[u8]) {
+		self.put_slice(src);
+	}
+}
+
+struct ByteCounter(usize);
+
+impl ByteBuf for ByteCounter {
+	fn reserve_bytes(&mut self, _: usize) {
+	}
+
+	fn put_u8_bytes(&mut self, _: u8) {
+		self.0 += std::mem::size_of::<u8>();
+	}
+
+	fn put_u16_be_bytes(&mut self, _: u16) {
+		self.0 += std::mem::size_of::<u16>();
+	}
+
+	fn put_slice_bytes(&mut self, src: &[u8]) {
+		self.0 += src.len();
+	}
+}
+
 trait BufMutExt {
+	fn get_u8(&mut self) -> u8;
+	fn get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError>;
+
 	fn try_get_u8(&mut self) -> Result<u8, DecodeError>;
 	fn try_get_u16_be(&mut self) -> Result<u16, DecodeError>;
-
-	fn append_u8(&mut self, n: u8);
-	fn append_u16_be(&mut self, n: u16);
-	fn append_packet_identifier(&mut self, packet_identifier: PacketIdentifier);
+	fn try_get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError>;
 }
 
 impl BufMutExt for bytes::BytesMut {
+	fn get_u8(&mut self) -> u8 {
+		let result = self[0];
+		self.advance(std::mem::size_of::<u8>());
+		result
+	}
+
+	fn get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError> {
+		let packet_identifier = self.split_to(std::mem::size_of::<u16>()).into_buf().get_u16_be();
+		PacketIdentifier::new(packet_identifier).ok_or(DecodeError::ZeroPacketIdentifier)
+	}
+
 	fn try_get_u8(&mut self) -> Result<u8, DecodeError> {
 		if self.len() < std::mem::size_of::<u8>() {
 			return Err(DecodeError::IncompletePacket);
@@ -439,19 +495,12 @@ impl BufMutExt for bytes::BytesMut {
 		Ok(self.split_to(std::mem::size_of::<u16>()).into_buf().get_u16_be())
 	}
 
-	fn append_u8(&mut self, n: u8) {
-		self.reserve(std::mem::size_of::<u8>());
-		self.put_u8(n);
-	}
+	fn try_get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError> {
+		if self.len() < std::mem::size_of::<u16>() {
+			return Err(DecodeError::IncompletePacket);
+		}
 
-	fn append_u16_be(&mut self, n: u16) {
-		self.reserve(std::mem::size_of::<u16>());
-		self.put_u16_be(n);
-	}
-
-	fn append_packet_identifier(&mut self, packet_identifier: PacketIdentifier) {
-		self.reserve(std::mem::size_of::<u16>());
-		self.put_u16_be(packet_identifier.0);
+		self.get_packet_identifier()
 	}
 }
 
@@ -476,24 +525,20 @@ mod tests {
 	}
 
 	fn remaining_length_encode_inner_ok(value: usize, expected: &[u8]) {
-		use tokio_codec::Encoder;
-
 		// Can encode into an empty buffer
 		let mut bytes = bytes::BytesMut::new();
-		super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap();
+		super::encode_remaining_length(value, &mut bytes).unwrap();
 		assert_eq!(&*bytes, expected);
 
 		// Can encode into a partially populated buffer
 		let mut bytes: bytes::BytesMut = vec![0x00; 3].into();
-		super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap();
+		super::encode_remaining_length(value, &mut bytes).unwrap();
 		assert_eq!(&bytes[3..], expected);
 	}
 
 	fn remaining_length_encode_inner_too_high(value: usize) {
-		use tokio_codec::Encoder;
-
 		let mut bytes = bytes::BytesMut::new();
-		let err = super::RemainingLengthCodec::default().encode(value, &mut bytes).unwrap_err();
+		let err = super::encode_remaining_length(value, &mut bytes).unwrap_err();
 		if let super::EncodeError::RemainingLengthTooHigh(v) = err {
 			assert_eq!(v, value);
 		}
@@ -532,7 +577,7 @@ mod tests {
 		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
-		let actual = super::RemainingLengthCodec::default().decode(&mut bytes).unwrap().unwrap();
+		let actual = super::RemainingLengthDecoder::default().decode(&mut bytes).unwrap().unwrap();
 		assert_eq!(actual, expected);
 		assert!(bytes.is_empty());
 	}
@@ -541,7 +586,7 @@ mod tests {
 		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
-		let err = super::RemainingLengthCodec::default().decode(&mut bytes).unwrap_err();
+		let err = super::RemainingLengthDecoder::default().decode(&mut bytes).unwrap_err();
 		if let super::DecodeError::RemainingLengthTooHigh = err {
 		}
 		else {
@@ -553,6 +598,6 @@ mod tests {
 		use tokio_codec::Decoder;
 
 		let mut bytes = bytes::BytesMut::from(bytes);
-		assert_eq!(super::RemainingLengthCodec::default().decode(&mut bytes).unwrap(), None);
+		assert_eq!(super::RemainingLengthDecoder::default().decode(&mut bytes).unwrap(), None);
 	}
 }

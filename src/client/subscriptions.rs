@@ -20,7 +20,7 @@ impl State {
 		let mut subscription_updates = vec![];
 
 		match packet.take() {
-			Some(crate::proto::Packet::SubAck { packet_identifier, qos }) => match self.subscription_updates_waiting_to_be_acked.pop_front() {
+			Some(crate::proto::Packet::SubAck(crate::proto::SubAck { packet_identifier, qos })) => match self.subscription_updates_waiting_to_be_acked.pop_front() {
 				Some((packet_identifier_waiting_to_be_acked, BatchedSubscriptionUpdate::Subscribe(subscribe_to))) => {
 					if packet_identifier != packet_identifier_waiting_to_be_acked {
 						self.subscription_updates_waiting_to_be_acked.push_front((
@@ -93,7 +93,7 @@ impl State {
 					return Err(super::Error::UnexpectedSubAck(packet_identifier, super::UnexpectedSubUnsubAckReason::DidNotExpect)),
 			},
 
-			Some(crate::proto::Packet::UnsubAck { packet_identifier }) => match self.subscription_updates_waiting_to_be_acked.pop_front() {
+			Some(crate::proto::Packet::UnsubAck(crate::proto::UnsubAck { packet_identifier })) => match self.subscription_updates_waiting_to_be_acked.pop_front() {
 				Some((packet_identifier_waiting_to_be_acked, BatchedSubscriptionUpdate::Unsubscribe(unsubscribe_from))) => {
 					if packet_identifier != packet_identifier_waiting_to_be_acked {
 						self.subscription_updates_waiting_to_be_acked.push_front((
@@ -196,10 +196,10 @@ impl State {
 							BatchedSubscriptionUpdate::Subscribe(pending_subscriptions.clone()),
 						));
 
-						packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe {
+						packets_waiting_to_be_sent.push(crate::proto::Packet::Subscribe(crate::proto::Subscribe {
 							packet_identifier,
 							subscribe_to: pending_subscriptions,
-						});
+						}));
 					},
 
 					Err(err_) => {
@@ -220,10 +220,10 @@ impl State {
 							BatchedSubscriptionUpdate::Unsubscribe(pending_unsubscriptions.clone()),
 						));
 
-						packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe {
+						packets_waiting_to_be_sent.push(crate::proto::Packet::Unsubscribe(crate::proto::Unsubscribe {
 							packet_identifier,
 							unsubscribe_from: pending_unsubscriptions,
-						});
+						}));
 					},
 
 					Err(err_) => {
@@ -294,10 +294,10 @@ impl State {
 					BatchedSubscriptionUpdate::Subscribe(subscriptions_waiting_to_be_acked.clone()),
 				));
 
-				NewConnectionIter::Single(std::iter::once(crate::proto::Packet::Subscribe {
+				NewConnectionIter::Single(std::iter::once(crate::proto::Packet::Subscribe(crate::proto::Subscribe {
 					packet_identifier,
 					subscribe_to: subscriptions_waiting_to_be_acked,
-				}))
+				})))
 			}
 		}
 		else {
@@ -306,16 +306,16 @@ impl State {
 				self.subscription_updates_waiting_to_be_acked.iter()
 				.map(|(packet_identifier, subscription_update)| match subscription_update {
 					BatchedSubscriptionUpdate::Subscribe(subscribe_to) =>
-						crate::proto::Packet::Subscribe {
+						crate::proto::Packet::Subscribe(crate::proto::Subscribe {
 							packet_identifier: *packet_identifier,
 							subscribe_to: subscribe_to.clone(),
-						},
+						}),
 
 					BatchedSubscriptionUpdate::Unsubscribe(unsubscribe_from) =>
-						crate::proto::Packet::Unsubscribe {
+						crate::proto::Packet::Unsubscribe(crate::proto::Unsubscribe {
 							packet_identifier: *packet_identifier,
 							unsubscribe_from: unsubscribe_from.clone(),
-						},
+						}),
 				})
 				.collect();
 

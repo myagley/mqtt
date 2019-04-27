@@ -282,7 +282,7 @@ impl<IoS> Stream for Client<IoS> where IoS: IoSource, <<IoS as IoSource>::Future
 							}
 						}
 						else {
-							match framed.start_send(crate::proto::Packet::Disconnect) {
+							match framed.start_send(crate::proto::Packet::Disconnect(crate::proto::Disconnect)) {
 								Ok(futures::AsyncSink::Ready) => *sent_disconnect = true,
 
 								Ok(futures::AsyncSink::NotReady(_)) => return Ok(futures::Async::NotReady),
