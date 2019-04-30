@@ -1,4 +1,4 @@
-use futures::{ Future, Sink, Stream };
+use futures::{ Future, IntoFuture, Sink, Stream };
 
 #[derive(Debug)]
 pub(super) struct State {
@@ -9,7 +9,7 @@ pub(super) struct State {
 
 	/// Holds PUBLISH packets sent by us, waiting for a corresponding PUBACK or PUBREC
 	waiting_to_be_acked:
-		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Packet)>,
+		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Publish)>,
 
 	/// Holds the identifiers of PUBREC packets sent by us, waiting for a corresponding PUBREL,
 	/// and the contents of the original PUBLISH packet for which we sent the PUBREC
@@ -18,7 +18,7 @@ pub(super) struct State {
 
 	/// Holds PUBLISH packets sent by us, waiting for a corresponding PUBCOMP
 	waiting_to_be_completed:
-		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Packet)>,
+		std::collections::BTreeMap<crate::proto::PacketIdentifier, (futures::sync::oneshot::Sender<()>, crate::proto::Publish)>,
 }
 
 impl State {
@@ -176,12 +176,12 @@ impl State {
 						payload: publication.payload.clone(),
 					});
 
-					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish(crate::proto::Publish {
+					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtLeastOnce(packet_identifier, true),
 						retain: publication.retain,
 						topic_name: publication.topic_name,
 						payload: publication.payload,
-					})));
+					}));
 
 					packets_waiting_to_be_sent.push(packet);
 				},
@@ -202,12 +202,12 @@ impl State {
 						payload: publication.payload.clone(),
 					});
 
-					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Packet::Publish(crate::proto::Publish {
+					self.waiting_to_be_acked.insert(packet_identifier, (ack_sender, crate::proto::Publish {
 						packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::ExactlyOnce(packet_identifier, true),
 						retain: publication.retain,
 						topic_name: publication.topic_name,
 						payload: publication.payload,
-					})));
+					}));
 
 					packets_waiting_to_be_sent.push(packet);
 				},
@@ -232,17 +232,23 @@ impl State {
 			}
 		}
 
-		self.waiting_to_be_acked.values().map(|(_, packet)| packet.clone())
+		self.waiting_to_be_acked.values().map(|(_, packet)| crate::proto::Packet::Publish(packet.clone()))
 		.chain(self.waiting_to_be_released.keys().map(|&packet_identifier| crate::proto::Packet::PubRec(crate::proto::PubRec {
 			packet_identifier,
 		})))
-		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| packet.clone()))
+		.chain(self.waiting_to_be_completed.values().map(|(_, packet)| crate::proto::Packet::Publish(packet.clone())))
 	}
 
 	pub(super) fn publish(&mut self, publication: crate::proto::Publication) -> impl Future<Item = (), Error = PublishError> {
 		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
-		self.publish_requests_waiting_to_be_sent.push_back(PublishRequest { publication, ack_sender });
-		ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)
+		match PublishRequest::new(publication, ack_sender) {
+			Ok(publish_request) => {
+				self.publish_requests_waiting_to_be_sent.push_back(publish_request);
+				futures::future::Either::A(ack_receiver.map_err(|_| PublishError::ClientDoesNotExist))
+			},
+
+			Err(err) => futures::future::Either::B(futures::future::err(err)),
+		}
 	}
 
 	pub(super) fn publish_handle(&self) -> PublishHandle {
@@ -274,34 +280,68 @@ impl PublishHandle {
 	pub fn publish(&mut self, publication: crate::proto::Publication) -> impl Future<Item = (), Error = PublishError> {
 		let (ack_sender, ack_receiver) = futures::sync::oneshot::channel();
 
-		self.0.clone()
-			.send(PublishRequest { publication, ack_sender })
-			.then(|result| match result {
-				Ok(_) => Ok(ack_receiver.map_err(|_| PublishError::ClientDoesNotExist)),
-				Err(_) => Err(PublishError::ClientDoesNotExist)
-			})
-			.flatten()
+		let sender = self.0.clone();
+		PublishRequest::new(publication, ack_sender)
+			.into_future()
+			.and_then(|publish_request| sender.send(publish_request).map_err(|_| PublishError::ClientDoesNotExist))
+			.and_then(|_| ack_receiver.map_err(|_| PublishError::ClientDoesNotExist))
 	}
 }
 
 #[derive(Debug)]
 pub enum PublishError {
 	ClientDoesNotExist,
+	EncodePacket(crate::proto::Publication, crate::proto::EncodeError),
 }
 
 impl std::fmt::Display for PublishError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			PublishError::ClientDoesNotExist => write!(f, "client does not exist"),
+			PublishError::EncodePacket(publication, err) => write!(f, "cannot encode PUBLISH packet with topic {:?}: {}", publication.topic_name, err),
 		}
 	}
 }
 
 impl std::error::Error for PublishError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			PublishError::ClientDoesNotExist => None,
+			PublishError::EncodePacket(_, err) => Some(err),
+		}
+	}
 }
 
 #[derive(Debug)]
 struct PublishRequest {
 	publication: crate::proto::Publication,
 	ack_sender: futures::sync::oneshot::Sender<()>,
+}
+
+impl PublishRequest {
+	fn new(publication: crate::proto::Publication, ack_sender: futures::sync::oneshot::Sender<()>) -> Result<PublishRequest, PublishError> {
+		use crate::proto::PacketMeta;
+
+		let packet = crate::proto::Publish {
+			packet_identifier_dup_qos: crate::proto::PacketIdentifierDupQoS::AtMostOnce,
+			retain: publication.retain,
+			topic_name: publication.topic_name,
+			payload: publication.payload,
+		};
+
+		let mut counter = crate::proto::ByteCounter::new();
+		let encode_result = packet.encode(&mut counter).and_then(|()| crate::proto::encode_remaining_length(counter.0, &mut counter));
+
+		let publication = crate::proto::Publication {
+			topic_name: packet.topic_name,
+			qos: publication.qos,
+			retain: publication.retain,
+			payload: packet.payload,
+		};
+
+		match encode_result {
+			Ok(_) => Ok(PublishRequest { publication, ack_sender }),
+			Err(err) => Err(PublishError::EncodePacket(publication, err)),
+		}
+	}
 }

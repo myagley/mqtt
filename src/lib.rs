@@ -5,6 +5,7 @@
 #![deny(rust_2018_idioms, warnings)]
 #![deny(clippy::all, clippy::pedantic)]
 #![allow(
+	clippy::cyclomatic_complexity,
 	clippy::default_trait_access,
 	clippy::large_enum_variant,
 	clippy::module_name_repetitions,
@@ -26,7 +27,7 @@ pub use self::client::{
 	ReceivedPublication,
 	ShutdownError,
 	ShutdownHandle,
-	SubscriptionUpdate,
+	SubscriptionUpdateEvent,
 	UpdateSubscriptionError,
 	UpdateSubscriptionHandle,
 };

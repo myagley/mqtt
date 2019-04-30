@@ -50,7 +50,7 @@ pub enum Packet {
 }
 
 /// Metadata about a [`Packet`]
-trait PacketMeta: Sized {
+pub(crate) trait PacketMeta: Sized {
 	/// The packet type for this kind of packet
 	const PACKET_TYPE: u8;
 
@@ -888,7 +888,7 @@ impl tokio_codec::Encoder for PacketCodec {
 }
 
 fn encode_packet<P>(packet: &P, flags: u8, dst: &mut bytes::BytesMut) -> Result<(), super::EncodeError> where P: PacketMeta {
-	let mut counter = super::ByteCounter(0);
+	let mut counter = super::ByteCounter::new();
 	packet.encode(&mut counter)?;
 	let body_len = counter.0;
 

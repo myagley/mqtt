@@ -6,7 +6,7 @@ mod publish;
 mod subscriptions;
 
 pub use self::publish::{ PublishError, PublishHandle };
-pub use self::subscriptions::{ SubscriptionUpdate, UpdateSubscriptionError, UpdateSubscriptionHandle };
+pub use self::subscriptions::{ UpdateSubscriptionError, UpdateSubscriptionHandle };
 
 /// An MQTT v3.1.1 client.
 ///
@@ -61,6 +61,10 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 
 		let (shutdown_send, shutdown_recv) = futures::sync::mpsc::channel(0);
 
+		// TODO: username / password / will can be too large and prevent a CONNECT packet from being encoded.
+		//       `Client::new()` should detect that and retrurn an error.
+		//       But password is provided by the IoSource, so it can't be done here?
+
 		Client(ClientState::Up {
 			client_id,
 			username,
@@ -102,11 +106,7 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	/// Subscribes to a topic with the given parameters
 	pub fn subscribe(&mut self, subscribe_to: crate::proto::SubscribeTo) -> Result<(), UpdateSubscriptionError> {
 		match &mut self.0 {
-			ClientState::Up { subscriptions, .. } => {
-				subscriptions.update_subscription(crate::SubscriptionUpdate::Subscribe(subscribe_to));
-				Ok(())
-			},
-
+			ClientState::Up { subscriptions, .. } => subscriptions.subscribe(subscribe_to),
 			ClientState::ShuttingDown { .. } |
 			ClientState::ShutDown { .. } => Err(UpdateSubscriptionError::ClientDoesNotExist),
 		}
@@ -115,11 +115,7 @@ impl<IoS> Client<IoS> where IoS: IoSource {
 	/// Unsubscribes from the given topic
 	pub fn unsubscribe(&mut self, unsubscribe_from: String) -> Result<(), UpdateSubscriptionError> {
 		match &mut self.0 {
-			ClientState::Up { subscriptions, .. } => {
-				subscriptions.update_subscription(crate::SubscriptionUpdate::Unsubscribe(unsubscribe_from));
-				Ok(())
-			},
-
+			ClientState::Up { subscriptions, .. } => subscriptions.unsubscribe(unsubscribe_from),
 			ClientState::ShuttingDown { .. } |
 			ClientState::ShutDown { .. } => Err(UpdateSubscriptionError::ClientDoesNotExist),
 		}
@@ -379,7 +375,14 @@ pub enum Event {
 	Publication(ReceivedPublication),
 
 	/// Subscription updates acked by the server
-	SubscriptionUpdates(Vec<crate::SubscriptionUpdate>),
+	SubscriptionUpdates(Vec<SubscriptionUpdateEvent>),
+}
+
+/// A subscription update event
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubscriptionUpdateEvent {
+	Subscribe(crate::proto::SubscribeTo),
+	Unsubscribe(String),
 }
 
 /// A message that was received from the server
@@ -637,7 +640,15 @@ impl Error {
 
 	fn session_is_resumable(&self) -> bool {
 		match self {
-			Error::DecodePacket(crate::proto::DecodeError::Io(err)) => err.kind() == std::io::ErrorKind::TimedOut,
+			Error::DecodePacket(crate::proto::DecodeError::Io(err)) => match err.kind() {
+				std::io::ErrorKind::TimedOut => true,
+				_ => false,
+			},
+			Error::EncodePacket(crate::proto::EncodeError::Io(err)) => match err.kind() {
+				std::io::ErrorKind::TimedOut |
+				std::io::ErrorKind::WriteZero => true,
+				_ => false,
+			},
 			Error::ServerClosedConnection => true,
 			_ => false,
 		}

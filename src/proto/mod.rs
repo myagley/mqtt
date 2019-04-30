@@ -32,6 +32,8 @@ pub use self::packet::{
 	SubscribeTo,
 };
 
+pub(crate) use self::packet::PacketMeta;
+
 /// The client ID
 ///
 /// Refs:
@@ -202,7 +204,7 @@ impl tokio_codec::Decoder for RemainingLengthDecoder {
 	}
 }
 
-fn encode_remaining_length<B>(mut item: usize, dst: &mut B) -> Result<(), EncodeError> where B: ByteBuf {
+pub(crate) fn encode_remaining_length<B>(mut item: usize, dst: &mut B) -> Result<(), EncodeError> where B: ByteBuf {
 	dst.reserve_bytes(4 * std::mem::size_of::<u8>());
 
 	let original = item;
@@ -405,7 +407,7 @@ impl From<std::io::Error> for EncodeError {
 	}
 }
 
-trait ByteBuf {
+pub(crate) trait ByteBuf {
 	fn reserve_bytes(&mut self, additional: usize);
 
 	fn put_u8_bytes(&mut self, n: u8);
@@ -437,7 +439,13 @@ impl ByteBuf for bytes::BytesMut {
 	}
 }
 
-struct ByteCounter(usize);
+pub(crate) struct ByteCounter(pub(crate) usize);
+
+impl ByteCounter {
+	pub(crate) fn new() -> Self {
+		ByteCounter(0)
+	}
+}
 
 impl ByteBuf for ByteCounter {
 	fn reserve_bytes(&mut self, _: usize) {
