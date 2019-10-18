@@ -32,7 +32,7 @@ pub use self::packet::{
 	SubscribeTo,
 };
 
-pub(crate) use self::packet::PacketMeta;
+// pub(crate) use self::packet::PacketMeta;
 
 /// The client ID
 ///

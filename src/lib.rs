@@ -16,22 +16,22 @@
 	clippy::use_self,
 )]
 
-mod client;
-pub use self::client::{
-	Client,
-	Error,
-	Event,
-	IoSource,
-	PublishError,
-	PublishHandle,
-	ReceivedPublication,
-	ShutdownError,
-	ShutdownHandle,
-	SubscriptionUpdateEvent,
-	UpdateSubscriptionError,
-	UpdateSubscriptionHandle,
-};
+// mod client;
+// pub use self::client::{
+// 	Client,
+// 	Error,
+// 	Event,
+// 	IoSource,
+// 	PublishError,
+// 	PublishHandle,
+// 	ReceivedPublication,
+// 	ShutdownError,
+// 	ShutdownHandle,
+// 	SubscriptionUpdateEvent,
+// 	UpdateSubscriptionError,
+// 	UpdateSubscriptionHandle,
+// };
 
-mod logging_framed;
+// mod logging_framed;
 
 pub mod proto;
