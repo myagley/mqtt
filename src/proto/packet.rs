@@ -116,6 +116,8 @@ pub struct Connect {
 	pub will: Option<Publication>,
 	pub client_id: super::ClientId,
 	pub keep_alive: std::time::Duration,
+	pub protocol_name: String,
+	pub protocol_level: u8,
 }
 
 impl std::fmt::Debug for Connect {
@@ -125,6 +127,8 @@ impl std::fmt::Debug for Connect {
 			.field("will", &self.will)
 			.field("client_id", &self.client_id)
 			.field("keep_alive", &self.keep_alive)
+			.field("protocol_name", &self.protocol_name)
+			.field("protocol_level", &self.protocol_level)
 			.finish()
 	}
 }
@@ -138,14 +142,8 @@ impl PacketMeta for Connect {
 		}
 
 		let protocol_name = super::Utf8StringDecoder::default().decode(&mut src)?.ok_or(super::DecodeError::IncompletePacket)?;
-		if protocol_name != "MQTT" {
-			return Err(super::DecodeError::UnrecognizedProtocolName(protocol_name));
-		}
 
 		let protocol_level = src.try_get_u8()?;
-		if protocol_level != 0x04 {
-			return Err(super::DecodeError::UnrecognizedProtocolLevel(protocol_level));
-		}
 
 		let connect_flags = src.try_get_u8()?;
 		if connect_flags & 0x01 != 0 {
@@ -218,15 +216,17 @@ impl PacketMeta for Connect {
 			will,
 			client_id,
 			keep_alive,
+			protocol_name,
+			protocol_level,
 		})
 	}
 
 	fn encode<B>(&self, dst: &mut B) -> Result<(), super::EncodeError> where B: ByteBuf {
-		let Connect { username, password, will, client_id, keep_alive } = self;
+		let Connect { username, password, will, client_id, keep_alive, protocol_name, protocol_level } = self;
 
-		super::encode_utf8_str("MQTT", dst)?;
+		super::encode_utf8_str(protocol_name, dst)?;
 
-		dst.put_u8_bytes(0x04_u8);
+		dst.put_u8_bytes(*protocol_level);
 
 		{
 			let mut connect_flags = 0x00_u8;
