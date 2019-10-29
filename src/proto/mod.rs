@@ -286,6 +286,7 @@ impl std::ops::AddAssign<u16> for PacketIdentifier {
 #[derive(Debug)]
 pub enum DecodeError {
 	ConnectReservedSet,
+	ConnectZeroLengthIdWithExistingSession,
 	IncompletePacket,
 	Io(std::io::Error),
 	PublishDupAtMostOnce,
@@ -304,6 +305,7 @@ impl std::fmt::Display for DecodeError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			DecodeError::ConnectReservedSet => write!(f, "the reserved byte of the CONNECT flags is set"),
+			DecodeError::ConnectZeroLengthIdWithExistingSession => write!(f, "a zero length client_id was received without the clean session flag set"),
 			DecodeError::IncompletePacket => write!(f, "packet is truncated"),
 			DecodeError::Io(err) => write!(f, "I/O error: {}", err),
 			DecodeError::NoTopics => write!(f, "expected at least one topic but there were none"),
@@ -332,6 +334,7 @@ impl std::error::Error for DecodeError {
 		#[allow(clippy::match_same_arms)]
 		match self {
 			DecodeError::ConnectReservedSet => None,
+			DecodeError::ConnectZeroLengthIdWithExistingSession => None,
 			DecodeError::IncompletePacket => None,
 			DecodeError::Io(err) => Some(err),
 			DecodeError::NoTopics => None,
