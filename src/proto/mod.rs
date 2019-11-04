@@ -236,7 +236,7 @@ pub(crate) fn encode_remaining_length<B>(mut item: usize, dst: &mut B) -> Result
 }
 
 /// A packet identifier. Two-byte unsigned integer that cannot be zero.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PacketIdentifier(u16);
 
 impl PacketIdentifier {
