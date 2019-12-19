@@ -2,7 +2,7 @@
  * MQTT protocol types.
  */
 
-use bytes::{ Buf, BufMut, IntoBuf };
+use bytes::{ Buf, BufMut };
 
 mod packet;
 
@@ -113,7 +113,7 @@ impl Default for Utf8StringDecoder {
 	}
 }
 
-impl tokio_codec::Decoder for Utf8StringDecoder {
+impl tokio_util::codec::Decoder for Utf8StringDecoder {
 	type Item = String;
 	type Error = DecodeError;
 
@@ -177,7 +177,7 @@ impl Default for RemainingLengthDecoder {
 	}
 }
 
-impl tokio_codec::Decoder for RemainingLengthDecoder {
+impl tokio_util::codec::Decoder for RemainingLengthDecoder {
 	type Item = usize;
 	type Error = DecodeError;
 
@@ -434,7 +434,7 @@ impl ByteBuf for bytes::BytesMut {
 	}
 
 	fn put_u16_be_bytes(&mut self, n: u16) {
-		self.put_u16_be(n);
+		self.put_u16(n);
 	}
 
 	fn put_slice_bytes(&mut self, src: &[u8]) {
@@ -468,7 +468,6 @@ impl ByteBuf for ByteCounter {
 }
 
 trait BufMutExt {
-	fn get_u8(&mut self) -> u8;
 	fn get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError>;
 
 	fn try_get_u8(&mut self) -> Result<u8, DecodeError>;
@@ -477,14 +476,8 @@ trait BufMutExt {
 }
 
 impl BufMutExt for bytes::BytesMut {
-	fn get_u8(&mut self) -> u8 {
-		let result = self[0];
-		self.advance(std::mem::size_of::<u8>());
-		result
-	}
-
 	fn get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError> {
-		let packet_identifier = self.split_to(std::mem::size_of::<u16>()).into_buf().get_u16_be();
+		let packet_identifier = self.split_to(std::mem::size_of::<u16>()).get_u16();
 		PacketIdentifier::new(packet_identifier).ok_or(DecodeError::ZeroPacketIdentifier)
 	}
 
@@ -503,7 +496,7 @@ impl BufMutExt for bytes::BytesMut {
 			return Err(DecodeError::IncompletePacket);
 		}
 
-		Ok(self.split_to(std::mem::size_of::<u16>()).into_buf().get_u16_be())
+		Ok(self.split_to(std::mem::size_of::<u16>()).get_u16())
 	}
 
 	fn try_get_packet_identifier(&mut self) -> Result<PacketIdentifier, DecodeError> {

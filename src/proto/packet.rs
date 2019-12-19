@@ -1,5 +1,5 @@
-use bytes::{ Buf, BufMut, IntoBuf };
-use tokio_codec::Decoder;
+use bytes::{ Buf, BufMut };
+use tokio_util::codec::Decoder;
 
 use super::{ BufMutExt, ByteBuf };
 
@@ -553,12 +553,12 @@ impl PacketMeta for SubAck {
 
 		let packet_identifier = src.get_packet_identifier()?;
 
-		let qos: Result<Vec<_>, _> = src.into_buf().iter().map(|qos| match qos {
+		let qos: Result<Vec<_>, _> = src.iter().map(|qos| match qos {
 			0x00 => Ok(SubAckQos::Success(QoS::AtMostOnce)),
 			0x01 => Ok(SubAckQos::Success(QoS::AtLeastOnce)),
 			0x02 => Ok(SubAckQos::Success(QoS::ExactlyOnce)),
 			0x80 => Ok(SubAckQos::Failure),
-			qos => Err(super::DecodeError::UnrecognizedQoS(qos)),
+			qos => Err(super::DecodeError::UnrecognizedQoS(*qos)),
 		}).collect();
 		let qos = qos?;
 
@@ -797,7 +797,7 @@ impl Default for PacketDecoderState {
 	}
 }
 
-impl tokio_codec::Decoder for PacketCodec {
+impl tokio_util::codec::Decoder for PacketCodec {
 	type Item = Packet;
 	type Error = super::DecodeError;
 
@@ -852,7 +852,7 @@ impl tokio_codec::Decoder for PacketCodec {
 	}
 }
 
-impl tokio_codec::Encoder for PacketCodec {
+impl tokio_util::codec::Encoder for PacketCodec {
 	type Item = Packet;
 	type Error = super::EncodeError;
 
